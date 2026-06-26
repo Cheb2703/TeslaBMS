@@ -1,6 +1,6 @@
-My take on BobbyBleacher's BMS, which is BobbyBleacher's take on Collin's BMS ;) 
+My take on amit-nz BMS, which is amit-nz's take on BobbyBleacher's take on Collin's BMS ;) 
 
-Source projects: https://github.com/BobbyBleacher/TeslaBMS and https://github.com/collin80/TeslaBMS
+Source projects: https://github.com/amit-nz/TeslaBMS-ESP32.git and https://github.com/BobbyBleacher/TeslaBMS and https://github.com/collin80/TeslaBMS
 
 Arduino compatible project (ported to work on cheap & common ESP32 boards) to interface with the BMS child boards on Tesla Model S modules; possibly works for X modules as well.
 
@@ -8,13 +8,14 @@ Full credit to [BobbyBleacher](https://github.com/BobbyBleacher/) for doing the 
 
 The board I use is a ESP32-S3-WROOM-1 (N16R8) - https://github.com/amit-nz/TeslaBMS-ESP32/blob/master/esp32-s3-n16r8-development-board.png
 
-Using this project, I monitor 16 x Tesla modules in a stationary ESS application.
+Using this project, I monitor 2 x Tesla modules in a stationary ESS application.
 
 Features:
 
 - Balances to the lowest cell between two packs connected together in series.
 - Cells balance for 30s and then update again, turning the balancers off momentarily to get accurate readings.
-- Baud set 631578 (Use 612500 for older Tesla packs??)
+- Baud set 631578 (Use 612500 for older Tesla packs??)\
+- Display on 4" LCD screen
 - CSV output to FTP server.
 - JSON endpoint to get module details.
 - Push data into Home Assistant via MQTT (cell group voltage readings, module temperature (+) and (-) and min/max).
