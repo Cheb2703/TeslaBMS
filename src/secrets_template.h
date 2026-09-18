@@ -1,5 +1,6 @@
-// Copy this file to src/secrets.h and fill in your own values.
-// src/secrets.h is listed in .gitignore so your real credentials are never committed.
+// Copy this file, rename the copy to secrets.h (in this same src/ folder), and
+// fill in your own values. src/secrets.h is listed in .gitignore so your real
+// credentials are never committed.
 
 #define SECRET_MQTT_SERVER_IP "192.168.1.2"
 #define SECRET_MQTT_USER "mqtt_user"
