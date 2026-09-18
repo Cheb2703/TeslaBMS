@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
-#include "WebUI.h"
+#include "Webui.h"
 
 // -- Access control switches ---------------------------------------------------
 // 1 = require it, 0 = don't. Both are OFF so you can join the AP and open the

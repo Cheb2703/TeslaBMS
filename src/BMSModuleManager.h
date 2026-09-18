@@ -4,7 +4,7 @@
 #include <PubSubClient.h>
 #include <ESPAsyncWebServer.h>
 #include <AsyncWebSocket.h>
-#include "DisplayManager.h"
+#include "Displaymanager.h"
 #include <ArduinoJson.h>
 //#include <esp32_can.h>
 

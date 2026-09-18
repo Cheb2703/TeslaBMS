@@ -27,7 +27,7 @@
 #include "SerialConsole.h"
 #include "Logger.h"
 #include "BMSModuleManager.h"
-#include "ChargerNPB.h"
+#include "Chargernpb.h"
 #include <Preferences.h>
 
 template<class T> inline Print &operator <<(Print &obj, T arg) { obj.print(arg); return obj; } //Lets us stream SerialUSB

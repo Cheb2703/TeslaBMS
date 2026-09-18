@@ -1,5 +1,5 @@
-#include "DisplayManager.h"
-#include "ChargerNPB.h" // NPB_CHG_*/NPB_FAULT_* bit macros for decoding the charging page
+#include "Displaymanager.h"
+#include "Chargernpb.h" // NPB_CHG_*/NPB_FAULT_* bit macros for decoding the charging page
 #include "Logger.h"     // Logger::info() for the display watchdog reinit log line
 
 // ── OCV → SoC lookup table (Panasonic NCR18650B, 11 breakpoints) ────────────

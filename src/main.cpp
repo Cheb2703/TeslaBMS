@@ -10,9 +10,9 @@
 #include "config.h"
 #include "BMSModuleManager.h"
 #include "SystemIO.h"
-#include "DisplayManager.h"
-#include "ChargerNPB.h"
-#include "WebUI.h"
+#include "Displaymanager.h"
+#include "Chargernpb.h"
+#include "Webui.h"
 //#include "MQTTClient.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
