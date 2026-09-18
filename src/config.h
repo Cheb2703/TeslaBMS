@@ -1,11 +1,26 @@
 #pragma once
 
 #include <Arduino.h>
+#include "WebUI.h"
+
+// -- Access control switches ---------------------------------------------------
+// 1 = require it, 0 = don't. Both are OFF so you can join the AP and open the
+// web UI without entering anything. Flip back to 1 to restore the old behavior
+// (the saved passwords in secrets.h / flash are left untouched, so they come
+// straight back). Anyone in Wi-Fi range can reach the device when these are 0.
+#define AP_REQUIRE_PASSWORD  0   // 0 = open Wi-Fi access point (no password)
+#define WEBUI_REQUIRE_AUTH   0   // 0 = web UI without username/password prompt
 
 //extern HardwareSerial Serial1; // Leftover from back in the day when this ran on arduino
 
 //Set to the proper port for your USB connection - SerialUSB on Due (Native) or Serial for Due (Programming) or Teensy
-#define SERIALCONSOLE   Serial
+// Routed through WebSerialTee (defined in WebUI.h) so everything printed
+// here (Logger's debug/info/warn/error/console output, the menu, input
+// echo) also reaches the web UI's Console tab -- USB behavior is unchanged,
+// this only adds a second destination. See WebUI.h for the exact scope of
+// what is/isn't captured, and a note on the extra include weight this adds
+// to every file that includes config.h.
+#define SERIALCONSOLE   webSerialTee
 
 //Define this to be the serial port the Tesla BMS modules are connected to.
 //On the Due you need to use a USART port (Serial1, Serial2, Serial3) and update the call to serialSpecialInit if not Serial1
@@ -36,6 +51,8 @@
 
 #define EEPROM_VERSION      0x10    //update any time EEPROM struct below is changed.
 #define EEPROM_PAGE         0
+
+
 
 typedef struct {
     uint8_t version;

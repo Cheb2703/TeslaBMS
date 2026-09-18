@@ -1,2 +1,4 @@
-secrets.h
+src/secrets.h
+.pio/
+.idea/
 esp32-s3-n16r8-development-board.png

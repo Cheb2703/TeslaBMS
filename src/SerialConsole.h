@@ -35,6 +35,14 @@ public:
     void loop();
     void printMenu();
 
+    // Feeds a whole line (no trailing newline needed) through the SAME
+    // parsing path serialEvent() uses for USB input -- handleConsoleCmd()
+    // -> handleShortCmd()/handleConfigCmd() -- so every existing command
+    // (short single-char commands and NAME=value config lines alike) works
+    // identically whether it arrived by USB or from the web console tab.
+    // Truncates to the same 79-char cmdBuffer limit as serial input.
+    void injectLine(const String& line);
+
 protected:
     enum CONSOLE_STATE
     {

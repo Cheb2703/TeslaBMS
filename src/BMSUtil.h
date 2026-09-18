@@ -59,14 +59,26 @@ public:
     { 
         int numBytes = 0; 
         if (Logger::isDebug()) SERIALCONSOLE.print("Reply: ");
-        while (SERIAL.available() && numBytes < maxLen)
+
+        // Wait for bytes to actually arrive instead of taking a single
+        // snapshot of SERIAL.available(). On a busy loop (display refresh,
+        // WiFi/OTA, etc.) the scheduler can delay us by a few ms, and a
+        // one-shot check can catch the UART mid-transmission and return a
+        // short/garbled read. This polls for up to ~15ms total, which is
+        // generous relative to the ~0.35ms it takes to transmit a 22-byte
+        // reply at BMS_BAUD, but still short enough not to stall the loop.
+        uint32_t deadline = millis() + 15;
+        while (numBytes < maxLen && (int32_t)(millis() - deadline) < 0)
         {
-            data[numBytes] = SERIAL.read();
-            if (Logger::isDebug()) {
-                SERIALCONSOLE.print(data[numBytes], HEX);
-                SERIALCONSOLE.print(" ");
+            if (SERIAL.available())
+            {
+                data[numBytes] = SERIAL.read();
+                if (Logger::isDebug()) {
+                    SERIALCONSOLE.print(data[numBytes], HEX);
+                    SERIALCONSOLE.print(" ");
+                }
+                numBytes++;
             }
-            numBytes++;
         }
         if (maxLen == numBytes)
         {
@@ -75,8 +87,8 @@ public:
         if (Logger::isDebug()) SERIALCONSOLE.println();
         return numBytes;
     }
-    
-    //Uses above functions to send data then get the response. Will auto retry if response not 
+
+    //Uses above functions to send data then get the response. Will auto retry if response not
     //the expected return length. This helps to alleviate any comm issues. The Due cannot exactly
     //match the correct comm speed so sometimes there are data glitches.
     static int sendDataWithReply(uint8_t *data, uint8_t dataLen, bool isWrite, uint8_t *retData, int retLen)
@@ -86,7 +98,11 @@ public:
         while (attempts < 4)
         {
             sendData(data, dataLen, isWrite);
-            delay(2 * ((retLen / 8) + 1));
+            // Small settle delay before polling for the reply. getReply()
+            // itself now waits (bounded) for bytes to arrive, so this no
+            // longer needs to be sized to cover the whole transfer -- it's
+            // just giving the BMB a moment to start responding.
+            delay(3);
             returnedLength = getReply(retData, retLen);
             if (returnedLength == retLen) return returnedLength;
             attempts++;
