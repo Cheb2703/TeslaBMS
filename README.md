@@ -1,53 +1,184 @@
-My take on amit-nz BMS, which is amit-nz's take on BobbyBleacher's take on Collin's BMS ;) 
+# TeslaBMS-ESP32
 
-Source projects: https://github.com/amit-nz/TeslaBMS-ESP32.git and https://github.com/BobbyBleacher/TeslaBMS and https://github.com/collin80/TeslaBMS
+An ESP32-S3 battery monitor and charger controller for **Tesla Model S battery modules**. It talks to the Tesla BMS boards (BMBs) on each module, balances the cells, controls a **MEAN WELL NPB-750-24** charger over CAN bus, and serves a full web interface from its own Wi-Fi access point, so it works with no home network or internet connection.
 
-Arduino compatible project (ported to work on cheap & common ESP32 boards) to interface with the BMS child boards on Tesla Model S modules; possibly works for X modules as well.
+I use it to power a scissor lift, but nothing in it is specific to that. It should suit any electric vehicle or storage application where you want to charge and monitor Tesla modules.
 
-Full credit to [BobbyBleacher](https://github.com/BobbyBleacher/) for doing the porting work.
+> **Use at your own risk.** Working with lithium-ion batteries is dangerous. Read [Safety](#safety) before you connect anything.
 
-The board I use is a ESP32-S3-WROOM-1 (N16R8) - https://github.com/amit-nz/TeslaBMS-ESP32/blob/master/esp32-s3-n16r8-development-board.png
+## Credits
 
-Using this project, I monitor 2 x Tesla modules in a stationary ESS application.
+This is my take on amit-nz's BMS, which is amit-nz's take on BobbyBleacher's take on Collin's BMS. Full credit to the original authors:
 
-Features:
+- [collin80/TeslaBMS](https://github.com/collin80/TeslaBMS): the original Tesla BMB protocol work
+- [BobbyBleacher/TeslaBMS](https://github.com/BobbyBleacher/TeslaBMS): the ESP32 port
+- [amit-nz/TeslaBMS-ESP32](https://github.com/amit-nz/TeslaBMS-ESP32): the version this one was forked from
 
-- Balances to the lowest cell between two packs connected together in series.
-- Cells balance for 30s and then update again, turning the balancers off momentarily to get accurate readings.
-- Baud set 631578 (Use 612500 for older Tesla packs??)\
-- Display on 4" LCD screen
-- CSV output to FTP server.
-- JSON endpoint to get module details.
-- Push data into Home Assistant via MQTT (cell group voltage readings, module temperature (+) and (-) and min/max).
-- WebUI for configuring various settings.
-- Tested on the readily available [ESP32-S3-WROOM-1 N16R8 Development Board](https://github.com/amit-nz/TeslaBMS-ESP32/blob/master/esp32-s3-n16r8-development-board.png).
+Compared with the version it was forked from, this one adds CAN charger control, a 4" LCD, a full on-device web UI, and a PlatformIO build. It drops the MQTT / Home Assistant and FTP export features.
 
-To-do:
-- Refine LED flash states and put them in a readme!
-- Simple WebUI that runs on the ESP32 for showing cell group/module states.
-- Small OLED/E-Ink Display to show various data pertaining to the system.
-- Ability to set things like Balancing Voltages etc w/o requring to connect using a phone/computer to the WebUI.
-- Add SSL to MQTT to secure communication between the ESP32 and HASS.
-- Add SSL to WebUI to secure communication between the ESP32 and clients.
+## Features
 
-Wiring:
+- **Reads every cell** (voltage) and both module temperatures from each Tesla BMB, and finds and numbers the boards automatically.
+- **Balances the cells.** Modules are handled in pairs, and each pair balances to the lowest cell in that pair.
+- **Protects the pack.** Adjustable cell voltage and temperature limits. Any fault shows on the LCD, in the web UI, and on a buzzer.
+- **Controls a MEAN WELL NPB-750-24 charger** over CAN bus:
+  - an everyday "daily" charge target (about 80% charge) and a one-tap full-charge override,
+  - the full charge curve (constant current, constant voltage, float, taper cutoff, restart voltage, stage timeouts),
+  - a safety interlock that keeps the charger switched **off** for as long as any fault is active, and resumes charging automatically when the fault clears.
+- **Its own Wi-Fi access point and web UI. No home Wi-Fi or internet needed.** The whole page is stored on the device. Tabs: Dashboard, Charging, Faults, Settings, Firmware update, and a live serial Console.
+- **4" LCD** (480x320) showing cell voltages, temperatures, state of charge, faults and charging status.
+- **Onboard LED and buzzer** for at-a-glance state.
+- **Wireless firmware updates** from the web UI.
+- **Optional home Wi-Fi** connection, in addition to the access point.
+- **JSON endpoint** (`/api/state`) with the live state, for your own tools.
 
-The modules are daisy-chained together with a TTL interface, in a "ring" topology. 
+State of charge is an **estimate** based on average cell voltage. The device does not count current, so treat it as a rough guide.
 
-The interface uses a Molex 15-97-5101 connector (but I just chopped off the end connector on the harness and used wago blocks).
+## Hardware
 
-Pinouts (original wiring harness): 
-* Red = 5V / 3.3V input to the module (I use 3.3V out from the ESP32-S3-WROOM-1)
-  * Note: this is just to signal the BMBs to wake up - they're powered internally from the modules themselves
-* Green = Gnd for power and signal
-* Gray = Fault output
-* Yellow = UART Wire
-* Blue = UART Wire
+| Part | Notes |
+|---|---|
+| ESP32-S3 board with 16MB flash / 8MB PSRAM | I use an ESP32-S3-WROOM-1 N16R8 ([board picture](https://github.com/amit-nz/TeslaBMS-ESP32/blob/master/esp32-s3-n16r8-development-board.png)) |
+| Tesla Model S battery module(s) | The code is tuned for **6S** modules; my build is two modules in parallel |
+| MEAN WELL **NPB-750-24** charger | With a 3.3V CAN transceiver, such as a Waveshare SN65HVD230 |
+| 4" ST7796S SPI LCD, 480x320 | |
+| Buzzer | |
+| Custom PCB | See below |
 
-The fault output is active low. Use your own pull up to the fault line and if the line is pulled low then a fault has occurred.
+### Custom PCB
 
-Here is a PDF that explains how the wiring between modules and the master board is supposed to be:
-https://cdn.hackaday.io/files/10098432032832/wiring.pdf
+I built a custom PCB to connect everything above. **The schematic is here: [docs/schematic.pdf](docs/schematic.pdf).** The PCB layout files are available on request; open an issue on this repository and ask. The schematic and the pin table below are also everything you need to wire your own version on a prototype board.
 
-Disclaimer:
-Use at your own risk! Working with LiIon batteries is dangerous.
+### ESP32-S3 pin assignments
+
+| Function | GPIO |
+|---|---|
+| Tesla BMB serial RX / TX | 16 / 17 |
+| Tesla BMB fault line (active low) | 4 |
+| Charger CAN TX / RX | 2 / 1 |
+| Buzzer | 21 |
+| LCD SCLK / MOSI / DC / CS / RST / backlight | 11 / 12 / 13 / 14 / 9 / 10 |
+
+Pins are defined at the top of [`src/main.cpp`](src/main.cpp), and the LCD pins in [`src/Displaymanager.h`](src/Displaymanager.h).
+
+### Wiring the Tesla modules
+
+The modules are daisy-chained together with a TTL interface, in a ring topology. The interface uses a Molex 15-97-5101 connector (or chop the end off the harness and use Wago blocks).
+
+Pinouts (original wiring harness):
+
+- Red = 5V / 3.3V input to the module (I use 3.3V from the ESP32). This only wakes the BMBs; they are powered internally from the modules.
+- Green = ground for power and signal
+- Gray = fault output
+- Yellow = UART wire
+- Blue = UART wire
+
+The fault output is active low. The firmware enables the ESP32's internal pull-up on GPIO 4, so no external pull-up is needed. If a BMB pulls the line low, the firmware reports a fault.
+
+A PDF explaining how the wiring between the modules and the master board is supposed to work: <https://cdn.hackaday.io/files/10098432032832/wiring.pdf>
+
+The serial speed is set by `BMS_BAUD` in `src/main.cpp` (default 631578; other values that may suit older Tesla packs are 612500, 617647 and 608695).
+
+### Wiring the charger
+
+The NPB-750-24 connects through its 14-pin control connector: pin 11 = CANH, pin 12 = CANL, pins 9 and 10 = ground. The CAN bus runs at 250 kbit/s. The charger's address pins (A0 / A1) select its bus address; the code assumes both are left unconnected, which is address 3.
+
+**The charger must be in auto-ranging mode** for the voltage and current commands to take effect (see the MEAN WELL manual: all DIP switches off, do the ON to OFF sequence within 15 seconds, and jumper pins 7 and 8). MEAN WELL describes auto-ranging as being for lithium batteries that have a BMS.
+
+## Building and flashing
+
+You need [PlatformIO](https://platformio.org/). It works from VS Code, CLion (PlatformIO plugin) or the command line.
+
+1. Clone this repository and open the folder.
+2. In the `src/` folder, copy `secrets_template.h` to a new file named **`secrets.h`** and fill in your values. `secrets.h` is git-ignored so your details are never committed.
+   - Set `SECRET_AP_SSID` to the name you want for the device's Wi-Fi network.
+   - The MQTT and FTP entries are unused, but the code still expects them to exist, so leave the placeholder values.
+3. Build and upload:
+
+   ```
+   pio run -t upload
+   ```
+
+4. Optionally watch the serial output (115200 baud):
+
+   ```
+   pio device monitor
+   ```
+
+`platformio.ini` is set up for the N16R8 board (16MB flash, octal PSRAM). If your board is different, change the board and memory settings there. The display draws into PSRAM buffers, so the PSRAM settings in that file matter: without them the Arduino core does not detect the PSRAM.
+
+## Using it
+
+1. Power the device and connect a phone or laptop to its Wi-Fi network (the name you set in `secrets.h`).
+2. Open **`http://Lift.local`** or **`http://Lift.iot`**, or go straight to **`http://192.168.44.1`**.
+   - The hostname (`Lift` by default) can be changed in the Settings tab.
+   - `.local` works out of the box on iPhone and Mac. On Windows it needs Bonjour. `.iot` and the IP address work everywhere.
+
+### Open by default: no Wi-Fi password, no login
+
+As shipped, the Wi-Fi access point is **open** and the web UI has **no login**, so anyone within Wi-Fi range can change the charger and pack settings and upload new firmware. That is a deliberate convenience for a device that lives on a machine, but you should think about who could be near it.
+
+Two switches in [`src/config.h`](src/config.h) control this. Set either to `1` to turn the protection back on, using the credentials from `secrets.h`:
+
+```cpp
+#define AP_REQUIRE_PASSWORD  0   // 1 = the Wi-Fi network needs a password
+#define WEBUI_REQUIRE_AUTH   0   // 1 = the web UI asks for a username and password
+```
+
+### What the LED and buzzer mean
+
+The LED is the RGB LED built into the ESP32-S3 dev board. The firmware drives it on GPIO 48 (`PIN` in `src/main.cpp`); if your board revision wires its LED to a different pin, change it there.
+
+- **Solid red:** starting up.
+- **Solid yellow:** not connected to a home Wi-Fi network. This is normal if you only use the device's own access point.
+- **Blue flashes:** connected to your home Wi-Fi and reading the modules.
+- **Purple flashes:** fewer modules found than configured. It keeps searching.
+- **Green flashes:** all configured modules found.
+- **Buzzer, repeating double chirp:** at least one fault is active.
+
+### Charging
+
+The charger is controlled from the Charging tab (or the serial console):
+
+- **Daily target** is the everyday charge voltage (default 24.0V for a 6S pack, about 80%).
+- **Full-charge override** charges to a higher target (default 24.9V) once, and returns to the daily target when the charger reports it is full.
+- Curve settings, timeouts and the charger output switch are all on the same tab.
+
+Whenever a BMS fault is active, the charger output is forced off, and it turns back on by itself once the fault has cleared.
+
+### Default limits
+
+These are the first-boot defaults. Everything can be changed in the web UI Settings tab or from the serial console, and changes are saved on the device.
+
+| Setting | Default |
+|---|---|
+| Cell over-voltage / under-voltage | 4.20V / 3.30V |
+| Over-temperature / under-temperature | 65 °C / -10 °C |
+| Balance starts at | 3.95V (hysteresis 0.007V) |
+| Charger current | 22.5A (taper cutoff 2.25A) |
+
+The charger defaults are for a **6S** pack. For any other pack size, change the charger voltages and the cell limits to suit your pack. The driver refuses to command values outside the NPB-750-24's hardware range, but it cannot know what is safe for your battery.
+
+### Serial console
+
+Connect over USB at 115200 baud, or use the Console tab in the web UI. Type `h` for the full menu. Some useful commands:
+
+| Command | Action |
+|---|---|
+| `o` | Toggle charger output on/off |
+| `y` | Print charger status |
+| `u` | Toggle full-charge override |
+| `t` | Inject a 5-second test fault (checks the buzzer, display and web UI) |
+| `B` / `b` | Start / stop balancing |
+| `F`, `R`, `C` | Find boards, renumber boards, clear board faults |
+| `VOLTLIMHI=4.2` | Set a cell voltage limit (there are matching commands for the other limits) |
+| `CHGDAILYV=24.0` | Set the daily charge target |
+
+## Safety
+
+- Lithium-ion packs can catch fire or explode if mis-wired, over-charged, over-discharged or short-circuited. Only build this if you understand the risks.
+- **The software fault interlock only works while the ESP32 is running.** It is one layer of protection, not the only one. Use hardware protection as well, such as a fuse, a contactor or hardware cutoff, and consider gating the charger's remote on/off pins with a hardware safety circuit.
+- The state of charge shown is an estimate, not a measurement.
+- Check every charger and cell limit against your own pack before charging. The defaults are for one specific 6S setup.
+- Firmware updates over Wi-Fi are not password protected by default (see [Open by default](#open-by-default-no-wi-fi-password-no-login)).
+- Nothing here is certified for any purpose. You are responsible for what you build.
