@@ -38,7 +38,7 @@ State of charge is an **estimate** based on average cell voltage. The device doe
 
 | Part | Notes |
 |---|---|
-| ESP32-S3 board with 16MB flash / 8MB PSRAM | I use an ESP32-S3-WROOM-1 N16R8 ([board picture](https://github.com/amit-nz/TeslaBMS-ESP32/blob/master/esp32-s3-n16r8-development-board.png)) |
+| ESP32-S3 board with 16MB flash / 8MB PSRAM | I use an ESP32-S3-WROOM-1 N16R8 dev board. It follows the layout of Espressif's [ESP32-S3-DevKitC-1](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.1.html), which has the pinout diagram |
 | Tesla Model S battery module(s) | The code is tuned for **6S** modules; my build is two modules in parallel |
 | MEAN WELL **NPB-750-24** charger | With a 3.3V CAN transceiver, such as a Waveshare SN65HVD230 |
 | 4" ST7796S SPI LCD, 480x320 | |
@@ -127,7 +127,7 @@ Two switches in [`src/config.h`](src/config.h) control this. Set either to `1` t
 
 ### What the LED and buzzer mean
 
-The LED is the RGB LED built into the ESP32-S3 dev board. The firmware drives it on GPIO 48 (`PIN` in `src/main.cpp`); if your board revision wires its LED to a different pin, change it there.
+The LED is the RGB LED built into the ESP32-S3 dev board. The firmware drives it on GPIO 48 (`PIN` in `src/main.cpp`), which is where the original ESP32-S3-DevKitC-1 has it. Espressif's newer v1.1 revision uses GPIO 38 instead, so if your LED never lights, change `PIN` there.
 
 - **Solid red:** starting up.
 - **Solid yellow:** not connected to a home Wi-Fi network. This is normal if you only use the device's own access point.
