@@ -59,7 +59,7 @@ I built a custom PCB to connect everything above. **The schematic is here: [docs
 | Buzzer | 21 |
 | LCD SCLK / MOSI / DC / CS / RST / backlight | 11 / 12 / 13 / 14 / 9 / 10 |
 
-Pins are defined at the top of [`src/main.cpp`](src/main.cpp), and the LCD pins in [`src/Displaymanager.h`](src/Displaymanager.h).
+Pins are defined at the top of [`src/main.cpp`](src/main.cpp), and the LCD pins in [`src/Displaymanager.h`](src/Displaymanager.h). If the picture is upside down for how you mounted the display, change `LCD_ROTATION` in that same file (it is currently `3`; `1` turns it 180 degrees).
 
 ### Wiring the Tesla modules
 

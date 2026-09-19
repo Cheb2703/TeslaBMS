@@ -111,6 +111,13 @@ public:
 #define COL_DIM         0x6B4D  // #6a6a6a
 #define COL_WHITE       0xFFFF
 
+// ── Screen orientation ──────────────────────────────────────────────────────
+// LovyanGFX rotation, 0-3 (each step turns the picture 90 degrees). 1 and 3 are
+// both landscape and are 180 degrees apart: swap between them if the picture
+// is upside down for how the display is mounted. Used at start-up AND by the
+// periodic panel re-init, so it must only ever be set here.
+#define LCD_ROTATION 3
+
 // ── Display dimensions ───────────────────────────────────────────────────────
 #define DISP_W  480
 #define DISP_H  320

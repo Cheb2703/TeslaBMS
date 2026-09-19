@@ -64,7 +64,7 @@ DisplayManager::DisplayManager()
 
 void DisplayManager::begin() {
     _lcd.init();
-    _lcd.setRotation(1);
+    _lcd.setRotation(LCD_ROTATION);
     _lcd.setBrightness(200);
     _lcd.fillScreen(COL_BG);
 
@@ -141,7 +141,7 @@ void DisplayManager::reinitPanel() {
     delay(120); // ST7796S: minimum wait after reset release before commands
 
     _lcd.resendInitCommandsOnly();
-    _lcd.setRotation(1); // the raw command list doesn't set MADCTL -- the
+    _lcd.setRotation(LCD_ROTATION); // the raw command list doesn't set MADCTL -- the
                           // library normally reapplies this after init(),
                           // which we're bypassing here, so do it ourselves
                           // or the panel comes back in its default orientation
