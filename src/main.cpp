@@ -193,7 +193,7 @@ String mqtt_Topic = SECRET_MQTT_TOPIC;
 // certainly why the old UI would occasionally crash/hang on save).
 bool wifiReconnectPending = false;
 DisplayManager displayManager;  // Single global display instance
-bool currentFaultState = false;   // any fault active (drives the buzzer)
+bool buzzerAlarmActive = false;   // whether the buzzer should be sounding (worked out once a second)
 bool chargeBlockedState = false;  // a fault that holds the charger off is active (alarm-only faults, like low cell voltage, don't count)
 bool lastHwFaultState = false;   // tracks BMB_FAULT_PIN state for edge-triggered logging
 bool chargerReady = false;       // true once charger.begin() succeeds at boot -- gates the charging page
@@ -892,7 +892,7 @@ void updateBuzzer(bool active) {
 
 void loop()
 {
-    updateBuzzer(currentFaultState);
+    updateBuzzer(buzzerAlarmActive);
 
     dnsServer.processNextRequest(); // AP catch-all DNS -- cheap, must be polled every iteration
     console.loop(); // For interacting with the debug menu over serial
@@ -939,7 +939,6 @@ void loop()
 
         DisplayData dd;
         bms.buildDisplayData(dd); // dd.isFaulted and the fault list are derived live from the registry above
-        currentFaultState = dd.isFaulted;
         chargeBlockedState = dd.chargerBlocked;
 
         // Charger snapshot for the charging page. charger.data() just
@@ -961,6 +960,15 @@ void loop()
             strncpy(dd.chargerFaultStr, cfs.c_str(), sizeof(dd.chargerFaultStr) - 1);
             dd.chargerFaultStr[sizeof(dd.chargerFaultStr) - 1] = '\0';
             dd.chargerLastRxAgoMs = cd.online ? (millis() - cd.lastRxMs) : 0xFFFFFFFF;
+        }
+
+        // Buzzer. A fault that blocks charging always sounds it. An alarm-only
+        // fault (low cell voltage) sounds it only while the charger is NOT
+        // running: once charging is under way the pack is being recovered, so
+        // stay quiet, and sound again if charging stops with the pack still low.
+        {
+            bool chargerRunning = dd.chargerPresent && dd.chargerOnline && dd.chargerOutputOn;
+            buzzerAlarmActive = dd.chargerBlocked || (dd.isFaulted && !chargerRunning);
         }
 
         // Charger safety interlock -- keep the charger's output OFF for the
