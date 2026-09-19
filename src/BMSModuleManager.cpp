@@ -34,6 +34,7 @@ BMSModuleManager::BMSModuleManager(AsyncWebServer* webServer)
         faultList[i].id[0] = '\0';
         faultList[i].reason[0] = '\0';
         faultList[i].startMillis = 0;
+        faultList[i].blocksCharger = true;
     }
     memset(commFails, 0, sizeof(commFails));
     server = webServer;
@@ -466,8 +467,12 @@ void BMSModuleManager::getAllVoltTemp()
 
                     snprintf(idUV, sizeof(idUV), "M%dC%dUV", x, c + 1);
                     if (v < settings.UnderVSetpoint) {
-                        snprintf(reason, sizeof(reason), "MOD%d C%d UNDER-V %.2fV", x, c + 1, v);
-                        reportFault(idUV, reason);
+                        // Low cell voltage is an ALARM, not a reason to stop charging:
+                        // charging is the only thing that can fix it. Only a cell below
+                        // CELL_CHARGE_MIN_V (deeply discharged) blocks the charger.
+                        bool deep = (v < CELL_CHARGE_MIN_V);
+                        snprintf(reason, sizeof(reason), deep ? "MOD%d C%d DEEP DISCHARGE %.2fV" : "MOD%d C%d UNDER-V %.2fV", x, c + 1, v);
+                        reportFault(idUV, reason, deep);
                         Logger::error("%s", reason);
                     } else {
                         clearFaultById(idUV);
@@ -1089,6 +1094,7 @@ void BMSModuleManager::buildDisplayData(DisplayData& out) {
     // every 3 seconds while those other sources get reported every second.
     out.activeFaultCount = getActiveFaultCount();
     out.isFaulted         = (out.activeFaultCount > 0);
+    out.chargerBlocked    = (getBlockingFaultCount() > 0);
     int faultSlot = 0;
     uint32_t nowMs = millis();
     for (int i = 0; i < MAX_ACTIVE_FAULTS && faultSlot < MAX_DISPLAY_FAULTS; i++) {
@@ -1148,11 +1154,12 @@ void BMSModuleManager::buildDisplayData(DisplayData& out) {
 // already active, only the reason text is refreshed (e.g. an updated
 // voltage reading) -- the original startMillis is preserved so duration
 // tracking is continuous across polls rather than resetting every 3 seconds.
-void BMSModuleManager::reportFault(const char* id, const char* reason) {
+void BMSModuleManager::reportFault(const char* id, const char* reason, bool blocksCharger) {
     for (int i = 0; i < MAX_ACTIVE_FAULTS; i++) {
         if (faultList[i].active && strcmp(faultList[i].id, id) == 0) {
             strncpy(faultList[i].reason, reason, sizeof(faultList[i].reason) - 1);
             faultList[i].reason[sizeof(faultList[i].reason) - 1] = '\0';
+            faultList[i].blocksCharger = blocksCharger; // can change while active (a low cell that keeps falling)
             return; // already active -- keep the original startMillis
         }
     }
@@ -1165,6 +1172,7 @@ void BMSModuleManager::reportFault(const char* id, const char* reason) {
             strncpy(faultList[i].reason, reason, sizeof(faultList[i].reason) - 1);
             faultList[i].reason[sizeof(faultList[i].reason) - 1] = '\0';
             faultList[i].startMillis = millis();
+            faultList[i].blocksCharger = blocksCharger;
             return;
         }
     }
@@ -1180,6 +1188,14 @@ void BMSModuleManager::clearFaultById(const char* id) {
             return;
         }
     }
+}
+
+int BMSModuleManager::getBlockingFaultCount() {
+    int count = 0;
+    for (int i = 0; i < MAX_ACTIVE_FAULTS; i++) {
+        if (faultList[i].active && faultList[i].blocksCharger) count++;
+    }
+    return count;
 }
 
 int BMSModuleManager::getActiveFaultCount() {

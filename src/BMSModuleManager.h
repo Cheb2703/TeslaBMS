@@ -26,6 +26,7 @@ struct FaultRecord {
     char     id[12];       // stable key, e.g. "M1C4OV", "M2UT", "M1REG", "HWPIN", "TESTFLT"
     char     reason[40];   // human-readable description shown on the LCD/serial
     uint32_t startMillis;  // when this specific fault first became active
+    bool     blocksCharger; // true = charger is held off while this is active; false = alarm only (e.g. low cell voltage)
 };
 
 class BMSModuleManager
@@ -65,9 +66,10 @@ public:
     // main.cpp for fault sources that live outside this class (the hardware
     // FAULT pin, and the serial console's manual test-fault injection), so
     // every fault source ends up in one unified list regardless of origin.
-    void reportFault(const char* id, const char* reason);
+    void reportFault(const char* id, const char* reason, bool blocksCharger = true);
     void clearFaultById(const char* id);
     int  getActiveFaultCount();
+    int  getBlockingFaultCount();   // active faults that hold the charger off (see FaultRecord::blocksCharger)
 
 private:
     float packVolt;                         // All modules added together

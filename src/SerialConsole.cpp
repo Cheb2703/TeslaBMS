@@ -54,7 +54,7 @@ extern uint16_t chargerFVTimeoutMin;
 extern uint32_t bmbSimCommLossUntilMs;   // 'x' command: see main.cpp
 extern bool     resumeChargerAfterFault; // see main.cpp -- an explicit ON/OFF here cancels a pending resume
 extern bool     desiredChargerOn;   // what we WANT the charger's output to be -- see main.cpp
-extern bool     currentFaultState;  // true while a BMS fault is active -- see main.cpp
+extern bool     chargeBlockedState; // true while a fault that holds the charger off is active -- see main.cpp
 extern bool     chargerReady;       // true once charger.begin() succeeded at boot -- see main.cpp
 extern float    chargerDailyTargetV;
 extern float    chargerFullTargetV;
@@ -71,7 +71,7 @@ extern void     applyChargeTargetVoltage();
 // next time the output is turned on -- no point briefly toggling a charger
 // that's supposed to be off anyway.
 static void reapplyIfRunning(const char* label, float oldVal, float newVal) {
-    if (chargerReady && desiredChargerOn && !currentFaultState) {
+    if (chargerReady && desiredChargerOn && !chargeBlockedState) {
         if (charger.reapplyCurveNow())
             Logger::console("%s: was %f, now %f -- reapplied live (charger briefly toggled off/on)", label, oldVal, newVal);
         else
@@ -82,7 +82,7 @@ static void reapplyIfRunning(const char* label, float oldVal, float newVal) {
 }
 
 static void reapplyIfRunningInt(const char* label, uint16_t oldVal, uint16_t newVal) {
-    if (chargerReady && desiredChargerOn && !currentFaultState) {
+    if (chargerReady && desiredChargerOn && !chargeBlockedState) {
         if (charger.reapplyCurveNow())
             Logger::console("%s: was %d, now %d -- reapplied live (charger briefly toggled off/on)", label, oldVal, newVal);
         else
@@ -687,7 +687,7 @@ void SerialConsole::handleShortCmd() {
         // Same rule the web UI already had: don't turn the charger ON while a
         // BMS fault is active. (The 1-second interlock would switch it off
         // again anyway, but only after it had run for up to a second.)
-        if (newState && currentFaultState) {
+        if (newState && chargeBlockedState) {
             Logger::console("Refused: an active BMS fault is holding the charger output OFF");
             break;
         }
@@ -731,7 +731,7 @@ void SerialConsole::handleShortCmd() {
         preferences.putBool("chgFullOvr", chargerFullChargeOverride);
         preferences.end();
         applyChargeTargetVoltage();
-        if (chargerReady && desiredChargerOn && !currentFaultState) {
+        if (chargerReady && desiredChargerOn && !chargeBlockedState) {
             if (charger.reapplyCurveNow())
                 Logger::console("Full-charge override %s -- target now %fV, reapplied live", chargerFullChargeOverride ? "ON" : "OFF", chargerCurveCV);
             else

@@ -184,7 +184,7 @@ String WebUIManager::buildStateJson(const DisplayData& dd) {
     chg["fullChargeOverride"] = chargerFullChargeOverride;
     chg["activeTargetV"]      = serialized(safeFloatStr(chargerCurveCV, 2));
 
-    s_lastFaultActive = dd.isFaulted;
+    s_lastFaultActive = dd.chargerBlocked;   // alarm-only faults (low cell voltage) don't stop the charger being switched on
 
     String out;
     serializeJson(doc, out);

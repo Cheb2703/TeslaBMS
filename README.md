@@ -158,7 +158,7 @@ The charger is controlled from the Charging tab (or the serial console):
 
 Each time the charger switches on, the firmware reads its charge settings (current, voltage, float, taper) back and writes to the log whether they match what was sent. By default a mismatch is only logged; set `CHARGER_VERIFY_TURNS_OFF` to `1` in `src/config.h` to also switch the charger off.
 
-Whenever a BMS fault is active, the charger output is forced off, and it is not possible to switch it on. When the fault clears, the charger returns to the state it was in before: if it was running it turns back on by itself, and if it was off it stays off. After a reboot or power cut the charger always starts off.
+Whenever a fault that makes charging unsafe is active (over-voltage, over-temperature, a lost module, a sensor failure and so on), the charger output is forced off, and it is not possible to switch it on. **Low cell voltage is different:** a cell below the low-voltage limit sounds the alarm but does not stop charging, so a low pack can always be recharged. Only a cell below 2.5 V (shown as `DEEP DISCHARGE`) blocks charging. When the fault clears, the charger returns to the state it was in before: if it was running it turns back on by itself, and if it was off it stays off. After a reboot or power cut the charger always starts off.
 
 ### Default limits
 

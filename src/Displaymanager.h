@@ -185,6 +185,7 @@ struct DisplayData {
     int     badPackets;
     int     balancingCount;
     bool    isFaulted;
+    bool    chargerBlocked;   // true if any active fault holds the charger off (isFaulted also counts alarm-only faults)
 
     // Active faults -- the fault PAGE (drawn instead of the normal dashboard
     // while isFaulted is true) lists each of these with its own duration.

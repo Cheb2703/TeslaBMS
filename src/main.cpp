@@ -193,7 +193,8 @@ String mqtt_Topic = SECRET_MQTT_TOPIC;
 // certainly why the old UI would occasionally crash/hang on save).
 bool wifiReconnectPending = false;
 DisplayManager displayManager;  // Single global display instance
-bool currentFaultState = false;
+bool currentFaultState = false;   // any fault active (drives the buzzer)
+bool chargeBlockedState = false;  // a fault that holds the charger off is active (alarm-only faults, like low cell voltage, don't count)
 bool lastHwFaultState = false;   // tracks BMB_FAULT_PIN state for edge-triggered logging
 bool chargerReady = false;       // true once charger.begin() succeeds at boot -- gates the charging page
 
@@ -939,6 +940,7 @@ void loop()
         DisplayData dd;
         bms.buildDisplayData(dd); // dd.isFaulted and the fault list are derived live from the registry above
         currentFaultState = dd.isFaulted;
+        chargeBlockedState = dd.chargerBlocked;
 
         // Charger snapshot for the charging page. charger.data() just
         // returns the ChargerNPB's last poll() result (refreshed every 3s in
@@ -962,9 +964,10 @@ void loop()
         }
 
         // Charger safety interlock -- keep the charger's output OFF for the
-        // ENTIRE duration of any active BMS fault, not just its leading
-        // edge. This deliberately runs every cycle rather than only on the
-        // dd.isFaulted transition: setOutput() only flips its local
+        // ENTIRE duration of any active BMS fault that blocks charging (all of
+        // them except alarm-only ones like low cell voltage), not just its
+        // leading edge. This deliberately runs every cycle rather than only on
+        // the dd.chargerBlocked transition: setOutput() only flips its local
         // outputOn flag on a successful CAN write, so if that first OFF
         // command gets lost (bus glitch, charger momentarily unresponsive),
         // retrying here every second means the charger doesn't sit there
@@ -972,7 +975,7 @@ void loop()
         // second, independent layer on top of any hardware interlock (e.g.
         // gating the Remote ON/OFF pins with the kill switch) -- it only
         // helps while the ESP32 itself is alive and running.
-        if (chargerReady && dd.isFaulted) {
+        if (chargerReady && dd.chargerBlocked) {
             // First tick of a fault: remember whether the charger was meant to
             // be running, so it can go back to that state once the fault clears.
             // (Only ever set here, never cleared, so later ticks -- where
@@ -1011,29 +1014,35 @@ void loop()
             lastClearedFaultReason[sizeof(lastClearedFaultReason) - 1] = '\0';
             lastClearedFaultCount = lastActiveFaultCount;
             Logger::info("Fault cleared after %lu ms: %s", (unsigned long)lastFaultDurationMs, lastClearedFaultReason);
+        }
 
-            // Fault's gone -- resume charging automatically (this system is
-            // meant to run unattended). Re-assert CURVE_CC/CURVE_CV (the
-            // registers that actually govern output during curve/battery
-            // charging) before turning back on -- the fault's OFF period and
-            // this ON command together ARE the remote-toggle event curve
-            // registers need to latch in, so this is the right moment to
-            // make sure they're current.
-            // Only if it was running before the fault. Before, every cleared
-            // fault (even the 5-second 't' test fault) switched the charger ON
-            // whether or not it had been on.
-            if (chargerReady && resumeChargerAfterFault) {
-                resumeChargerAfterFault = false;
-                desiredChargerOn = true;
-                charger.setCurveCC(chargerCurveCC);
-                charger.setCurveCV(chargerCurveCV);
-                if (charger.setOutput(true))
-                    Logger::info("Fault cleared -- charger was on before the fault, output commanded back ON");
-                else
-                    Logger::error("Fault cleared -- charger output ON command FAILED -- charger not responding");
-            } else if (chargerReady) {
-                Logger::info("Fault cleared -- charger was off before the fault, leaving it off");
+        // Resume the charger once every fault that was HOLDING IT OFF has cleared.
+        // Tracked separately from the fault history above because an alarm-only
+        // fault (low cell voltage) can still be active when the blocking one
+        // clears, and that must not stop charging from resuming.
+        // Re-assert CURVE_CC/CURVE_CV (the registers that actually govern output
+        // during curve/battery charging) before turning back on -- the fault's
+        // OFF period and this ON command together ARE the remote-toggle event
+        // the curve registers need to latch in.
+        // Only if it was running before the fault; a charger that was off stays
+        // off (even after the 5-second 't' test fault).
+        {
+            static bool wasBlocked = false;
+            if (wasBlocked && !dd.chargerBlocked && chargerReady) {
+                if (resumeChargerAfterFault) {
+                    resumeChargerAfterFault = false;
+                    desiredChargerOn = true;
+                    charger.setCurveCC(chargerCurveCC);
+                    charger.setCurveCV(chargerCurveCV);
+                    if (charger.setOutput(true))
+                        Logger::info("Charging block cleared -- charger was on before, output commanded back ON");
+                    else
+                        Logger::error("Charging block cleared -- charger output ON command FAILED -- charger not responding");
+                } else {
+                    Logger::info("Charging block cleared -- charger was off before, leaving it off");
+                }
             }
+            wasBlocked = dd.chargerBlocked;
         }
 
         dd.hasFaultHistory          = hasFaultHistory;
@@ -1070,7 +1079,7 @@ void loop()
         // setOutputConfirmed().
         if (chargerCurveReapplyPending) {
             chargerCurveReapplyPending = false;
-            if (chargerReady && desiredChargerOn && !currentFaultState) {
+            if (chargerReady && desiredChargerOn && !chargeBlockedState) {
                 Serial.println("Reapplying charger curve settings live...");
                 if (charger.reapplyCurveNow())
                     Logger::info("Charger curve settings reapplied live");
@@ -1138,7 +1147,7 @@ void loop()
                 preferences.end();
                 applyChargeTargetVoltage();
                 Logger::info("Full charge complete -- reverting to daily charge target (%.2fV)", chargerDailyTargetV);
-                if (chargerReady && desiredChargerOn && !currentFaultState) {
+                if (chargerReady && desiredChargerOn && !chargeBlockedState) {
                     if (!charger.reapplyCurveNow())
                         Logger::error("Daily-target reapply after full charge failed to confirm -- charger not responding");
                 }

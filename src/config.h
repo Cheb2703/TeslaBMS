@@ -28,6 +28,12 @@
 // would silently switch over-voltage protection off.
 #define CELL_VOLT_ABS_MAX         4.25f
 
+// Lowest cell voltage at which the charger is still allowed to run. A cell
+// below the under-voltage limit (VOLTLIMLO, 3.30 V by default) sounds the alarm
+// but must NOT stop charging, or a low pack could never be recharged. Below
+// this floor a cell is considered deeply discharged and charging is blocked.
+#define CELL_CHARGE_MIN_V         2.5f
+
 // If loop() stops running for this long (a hang, an endless loop), the ESP32
 // reboots itself. The charger output is switched off during boot. Must be
 // longer than the slowest legitimate blocking call (a charger curve re-apply
