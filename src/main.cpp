@@ -327,17 +327,30 @@ void applyChargeTargetVoltage() {
 
 // Set when the charger output has just switched ON; loop() then reads the
 // curve settings back once (see the 3-second block).
-bool chargerVerifyPending = false;
+bool    chargerVerifyPending  = false;
+uint8_t chargerVerifyFailures = 0;   // consecutive failed checks since the output last switched on
 
 // Reads CURVE_CC/CV/FV/TC back from the charger and checks it is really using
 // what we sent. loop() context only (shares the CAN receive queue with poll()).
+// A failed check is repeated on the next 3-second cycle; only
+// CHARGER_VERIFY_ATTEMPTS failures in a row count as a real mismatch, so one
+// lost CAN message doesn't switch the charger off.
 void verifyChargerSettings() {
     if (charger.verifyCurve(chargerCurveCC, chargerCurveCV, chargerCurveFV, chargerCurveTC)) {
+        chargerVerifyFailures = 0;
         Logger::info("Charger read-back OK: CC=%f A  CV=%f V  FV=%f V  TC=%f A",
                      chargerCurveCC, chargerCurveCV, chargerCurveFV, chargerCurveTC);
         return;
     }
-    Logger::error("Charger settings do NOT match what was sent -- it may not be charging to the intended limits");
+    chargerVerifyFailures++;
+    if (chargerVerifyFailures < CHARGER_VERIFY_ATTEMPTS) {
+        Logger::warn("Charger read-back did not match (check %d of %d) -- checking again in a few seconds",
+                     (int)chargerVerifyFailures, CHARGER_VERIFY_ATTEMPTS);
+        chargerVerifyPending = true;   // try again on the next 3-second cycle
+        return;
+    }
+    chargerVerifyFailures = 0;
+    Logger::error("Charger settings do NOT match what was sent (%d checks in a row) -- it may not be charging to the intended limits", CHARGER_VERIFY_ATTEMPTS);
 #if CHARGER_VERIFY_TURNS_OFF
     desiredChargerOn = false;
     resumeChargerAfterFault = false;
@@ -1025,7 +1038,7 @@ void loop()
         {
             static bool chargerWasOn = false;
             bool isOn = chargerReady && charger.data().online && charger.data().outputOn;
-            if (isOn && !chargerWasOn) chargerVerifyPending = true;
+            if (isOn && !chargerWasOn) { chargerVerifyPending = true; chargerVerifyFailures = 0; }
             chargerWasOn = isOn;
             if (chargerVerifyPending && isOn) {
                 chargerVerifyPending = false;

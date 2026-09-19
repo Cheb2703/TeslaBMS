@@ -41,10 +41,13 @@
 #define LOOP_WDT_TIMEOUT_S        30
 
 // Each time the charger output switches on, its curve settings (CC/CV/FV/TC)
-// are read back and compared with what was sent. If they don't match:
-//   0 = only write an error to the log (default while this is being proven)
-//   1 = also switch the charger off and leave it off
-#define CHARGER_VERIFY_TURNS_OFF  0
+// are read back and compared with what was sent. A single failed check can just
+// be a lost CAN message, so it is repeated once per 3-second cycle, and only
+// CHARGER_VERIFY_ATTEMPTS failures in a row count as a real mismatch. Then:
+//   0 = only write an error to the log
+//   1 = also switch the charger off and leave it off (until you switch it on again)
+#define CHARGER_VERIFY_TURNS_OFF  1
+#define CHARGER_VERIFY_ATTEMPTS   3
 
 // A module that fails this many 3-second read cycles in a row (about 10 s)
 // raises a communication fault, so the charger is not left running on stale
@@ -64,6 +67,7 @@
 
 //Define this to be the serial port the Tesla BMS modules are connected to.
 //On the Due you need to use a USART port (Serial1, Serial2, Serial3) and update the call to serialSpecialInit if not Serial1
+#undef SERIAL   // the Arduino core defines SERIAL as 0; here it must mean the BMB serial port
 #define SERIAL  Serial1
 
 #define REG_DEV_STATUS      0
