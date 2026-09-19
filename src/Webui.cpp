@@ -35,10 +35,6 @@ extern String apPassword;
 extern String mdnsHostname;
 extern bool   wifiReconnectPending;   // main.cpp acts on this in loop(), never blocks here
 
-extern String ftpServer;
-extern String ftpUser;
-extern String ftpPassword;
-
 extern String webUsername;
 extern String webPassword;
 
@@ -207,8 +203,6 @@ String WebUIManager::buildSettingsJson() {
     doc["apSSID"]    = apSSID;
     doc["mdnsHostname"] = mdnsHostname;
     doc["webUsername"] = webUsername;
-    doc["ftpServer"] = ftpServer;
-    doc["ftpUser"]   = ftpUser;
     // Passwords deliberately omitted -- write-only from the browser's POV.
 
     JsonObject chg = doc["charger"].to<JsonObject>();
@@ -298,19 +292,6 @@ void WebUIManager::onApiSettingsPost(AsyncWebServerRequest* request, const Strin
     if (doc["tempLimLo"].is<float>()) {
         settings.UnderTSetpoint = clampf(doc["tempLimLo"].as<float>(), -40.0f, 50.0f);
         preferences.putFloat("underTSetpoint", settings.UnderTSetpoint);
-    }
-
-    if (doc["ftpServer"].is<const char*>()) {
-        ftpServer = doc["ftpServer"].as<String>();
-        preferences.putString("ftpServer", ftpServer);
-    }
-    if (doc["ftpUser"].is<const char*>()) {
-        ftpUser = doc["ftpUser"].as<String>();
-        preferences.putString("ftpUser", ftpUser);
-    }
-    if (doc["ftpPassword"].is<const char*>() && doc["ftpPassword"].as<String>().length() > 0) {
-        ftpPassword = doc["ftpPassword"].as<String>();
-        preferences.putString("ftpPassword", ftpPassword);
     }
 
     if (doc["webUsername"].is<const char*>() && doc["webUsername"].as<String>().length() > 0) {
@@ -961,16 +942,6 @@ nav button.tab.active{color:var(--accent);}
       <input type="password" id="s_webPassword" placeholder="leave blank to keep current">
     </div>
 
-    <div class="card">
-      <h2>FTP (stats export, optional)</h2>
-      <label>Server</label>
-      <input type="text" id="s_ftpServer">
-      <label>Username</label>
-      <input type="text" id="s_ftpUser">
-      <label>Password</label>
-      <input type="password" id="s_ftpPassword" placeholder="leave blank to keep current">
-    </div>
-
     <div class="actionsrow">
       <button id="s_saveBtn">Save Settings</button>
       <button id="s_rebootBtn" class="secondary">Reboot</button>
@@ -1181,8 +1152,6 @@ function loadSettings(){
     document.getElementById('s_mdnsHostname').value = s.mdnsHostname;
     document.getElementById('s_wifiSSID').value = s.wifiSSID;
     document.getElementById('s_webUsername').value = s.webUsername;
-    document.getElementById('s_ftpServer').value = s.ftpServer;
-    document.getElementById('s_ftpUser').value = s.ftpUser;
 
     document.getElementById('c_curveCC').value = s.charger.curveCC;
     document.getElementById('c_curveCV').value = s.charger.curveCV;
@@ -1231,24 +1200,19 @@ document.getElementById('s_saveBtn').addEventListener('click', ()=>{
     mdnsHostname: document.getElementById('s_mdnsHostname').value,
     wifiSSID: document.getElementById('s_wifiSSID').value,
     webUsername: document.getElementById('s_webUsername').value,
-    ftpServer: document.getElementById('s_ftpServer').value,
-    ftpUser: document.getElementById('s_ftpUser').value,
   };
   const apPass = document.getElementById('s_apPassword').value;
   const wifiPass = document.getElementById('s_wifiPassword').value;
   const webPass = document.getElementById('s_webPassword').value;
-  const ftpPass = document.getElementById('s_ftpPassword').value;
   if (apPass) body.apPassword = apPass;
   if (wifiPass) body.wifiPassword = wifiPass;
   if (webPass) body.webPassword = webPass;
-  if (ftpPass) body.ftpPassword = ftpPass;
 
   postJson('/api/settings', body).then(j=>{
     toast(j.wifiReconnectScheduled ? 'Saved -- reconnecting to Wi-Fi...' : 'Settings saved', 'ok');
     document.getElementById('s_apPassword').value = '';
     document.getElementById('s_wifiPassword').value = '';
     document.getElementById('s_webPassword').value = '';
-    document.getElementById('s_ftpPassword').value = '';
   }).catch(e=> toast('Save failed: '+e.message, 'err'));
 });
 

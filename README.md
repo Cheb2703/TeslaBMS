@@ -92,7 +92,7 @@ You need [PlatformIO](https://platformio.org/). It works from VS Code, CLion (Pl
 1. Clone this repository and open the folder.
 2. In the `src/` folder, copy `secrets_template.h` to a new file named **`secrets.h`** and fill in your values. `secrets.h` is git-ignored so your details are never committed.
    - Set `SECRET_AP_SSID` to the name you want for the device's Wi-Fi network.
-   - The MQTT and FTP entries are unused, but the code still expects them to exist, so leave the placeholder values.
+   - Only the Wi-Fi, access point and login entries are needed. The home Wi-Fi is optional; leave its name empty to use only the device's own access point.
 3. Build and upload:
 
    ```

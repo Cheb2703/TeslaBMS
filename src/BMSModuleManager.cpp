@@ -6,9 +6,6 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <AsyncWebSocket.h>
-#include <FS.h>              // File System support
-//#include <LittleFS.h>
-#include <ESP32_FTPClient.h> // FTP Client library
 
 extern EEPROMSettings settings;
 extern int packsConfigured;   // how many modules the user says the pack has (main.cpp)
@@ -19,7 +16,7 @@ float lowestPackTemp;
 float highestPackTemp;
 
 
-BMSModuleManager::BMSModuleManager(AsyncWebServer* webServer)
+BMSModuleManager::BMSModuleManager()
 {
     for (int i = 1; i <= MAX_MODULE_ADDR; i++) {
         modules[i].setExists(false);
@@ -37,30 +34,8 @@ BMSModuleManager::BMSModuleManager(AsyncWebServer* webServer)
         faultList[i].blocksCharger = true;
     }
     memset(commFails, 0, sizeof(commFails));
-    server = webServer;
 }
 
-// void BMSModuleManager::balanceCells()
-// {
-//   float lowestCell = 10.0f;
-//   for (int x = 1; x <= MAX_MODULE_ADDR; x++) //start cycling thru packs
-//     {
-//         if (modules[x].isExisting()) //end the loop if we're out of packs
-//         {
-//             modules[x].readModuleValues(); //get some data
-//             if (modules[x].getLowCellV() < lowestCell) lowestCell = modules[x].getLowCellV(); //Determine lowest value of of a pack and set lowestCell
-//             // Serial.println("In balanceCells() " + String(lowestCell, 3) + " Module " + String(x));
-
-//             if ( x%2 == 0) //Run this code if we're on an even numbered pack (so we do this for every two packs i.e, each string
-//             {
-//               modules[x-1].balanceCells(lowestCell); //Balance to the lowestCell (potentially) for the previously number pack. Tolerance is 0.007f
-//               modules[x].balanceCells(lowestCell); //Balance to the lowestCell (potentially) for the current pack
-//               // Serial.println("In balanceCells() 2 " + String(lowestCell, 3) + " Module " + String(x));
-//               lowestCell = 10.0f; //Reset lowestCell value for the next two packs
-//             }
-//         }
-//     }
-// }
 void BMSModuleManager::balanceCells(bool refreshReadings)
 {
     float lowestCell = 10.0f;
@@ -229,7 +204,7 @@ void BMSModuleManager::findBoards()
 void BMSModuleManager::renumberBoardIDs()
 {
     uint8_t payload[3];
-    uint8_t buff[8];
+    uint8_t buff[8] = {0};   // zeroed: if no reply arrives, the check below must not read leftover memory
     int attempts = 1;
 
     for (int y = 1; y < 63; y++)
@@ -283,106 +258,6 @@ void BMSModuleManager::clearFaults()
     // re-trigger on the next poll if the underlying condition (e.g. a cell
     // still over VOLTLIMHI) hasn't actually gone away -- which is correct.
 }
-
-/*
-Puts all boards on the bus into a Sleep state, very good to use when the vehicle is a rest state.
-Pulling the boards out of sleep only to check voltage decay and temperature when the contactors are open.
-*/
-
-void BMSModuleManager::sleepBoards()
-{
-    uint8_t payload[3];
-    uint8_t buff[8];
-    payload[0] = 0x7F; //broadcast
-    payload[1] = REG_IO_CTRL;//IO ctrl start
-    payload[2] = 0x04;//write sleep bit
-    BMSUtil::sendData(payload, 3, true);
-    delay(2);
-    BMSUtil::getReply(buff, 8);
-}
-
-/*
-Wakes all the boards up and clears thier SLEEP state bit in the Alert Status Registery
-*/
-
-void BMSModuleManager::wakeBoards()
-{
-    uint8_t payload[3];
-    uint8_t buff[8];
-    payload[0] = 0x7F; //broadcast
-    payload[1] = REG_IO_CTRL;//IO ctrl start
-    payload[2] = 0x00;//write sleep bit
-    BMSUtil::sendData(payload, 3, true);
-    delay(2);
-    BMSUtil::getReply(buff, 8);
-
-    payload[0] = 0x7F; //broadcast
-    payload[1] = REG_ALERT_STATUS;//Fault Status
-    payload[2] = 0x04;//data to cause a reset
-    BMSUtil::sendData(payload, 3, true);
-    delay(2);
-    BMSUtil::getReply(buff, 8);
-    payload[0] = 0x7F; //broadcast
-    payload[2] = 0x00;//data to clear
-    BMSUtil::sendData(payload, 3, true);
-    delay(2);
-    BMSUtil::getReply(buff, 8);
-}
-
-// void BMSModuleManager::getAllVoltTemp()
-// {
-//     packVolt = 0.0f;
-//     lowestCellVolt = 4.3f;
-//     highestCellVolt = 0.0f;
-//     lowestPackTemp = 50.0f;
-//     highestPackTemp = -10.0f;
-//     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
-//     {
-//     if (modules[x].isExisting())
-//     {
-//       modules[x].stopBalance();
-//     }
-//   }
-//   delay(1000);
-//     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
-//     {
-//         if (modules[x].isExisting())
-//         {
-//             Logger::debug("");
-//             Logger::debug("Module %i exists. Reading voltage and temperature values", x);
-//             modules[x].readModuleValues();
-//             Logger::debug("Module voltage: %f", modules[x].getModuleVoltage());
-//             Logger::debug("Lowest Cell V: %f     Highest Cell V: %f", modules[x].getLowCellV(), modules[x].getHighCellV());
-//             Logger::debug("Temp1: %f       Temp2: %f", modules[x].getTemperature(0), modules[x].getTemperature(1));
-//             packVolt += modules[x].getModuleVoltage();
-//             if (modules[x].getLowCellV() < lowestCellVolt) lowestCellVolt = modules[x].getLowCellV();
-//             if (modules[x].getHighCellV() > highestCellVolt) highestCellVolt = modules[x].getHighCellV();
-//             if (modules[x].getLowTemp() < lowestPackTemp) lowestPackTemp = modules[x].getLowTemp();
-//             if (modules[x].getHighTemp() > highestPackTemp) highestPackTemp = modules[x].getHighTemp();
-//         }
-//     }
-//     // Debug summary
-//     //Serial.println("");
-//     //Serial.println("High temp: " + String(highestPackTemp));
-//     //Serial.println("Low temp: " + String(lowestPackTemp));
-//     //Serial.println("High volt: " + String(highestCellVolt));
-//     //Serial.println("Low volt: " + String(lowestCellVolt));
-
-//     if (packVolt > highestPackVolt) highestPackVolt = packVolt;
-//     if (packVolt < lowestPackVolt) lowestPackVolt = packVolt;
-// //You can uncomment this code if you do have the module fault chain attached. Change the pin number to where it is attached
-// /*
-//     if (digitalRead(13) == LOW) {
-//         if (!isFaulted) Logger::error("One or more BMS modules have entered the fault state!");
-//         isFaulted = true;
-//     }
-//     else
-//     {
-//         if (isFaulted) Logger::info("All modules have exited a faulted state");
-//         isFaulted = false;
-//     }
-// */
-// }
 
 void BMSModuleManager::getAllVoltTemp()
 {
@@ -798,63 +673,6 @@ void BMSModuleManager::printPackSummary()
         }
     }
 }
-/*
-void BMSModuleManager::printPackDetails()
-{
-    uint8_t faults;
-    uint8_t alerts;
-    uint8_t COV;
-    uint8_t CUV;
-    int cellNum = 0;
-    Serial.println("");
-
-    //Logger::console("");
-    //Logger::console("");
-    //Logger::console("");
-    //Logger::console("                                         Pack Status:");
-    //if (isFaulted) Logger::console("                                           FAULTED!");
-    //else Logger::console("                                      All systems go!");
-    //Logger::console("Modules: %i    Voltage: %fV   Avg Cell Voltage: %fV     Avg Temp: %fC ", numFoundModules,
-    //                getPackVoltage(),getAvgCellVolt(), getAvgTemperature());
-    //Logger::console("");
-    for (int y = 1; y < 63; y++)
-    {
-        if (modules[y].isExisting())
-        {
-            faults = modules[y].getFaults();
-            alerts = modules[y].getAlerts();
-            COV = modules[y].getCOVCells();
-            CUV = modules[y].getCUVCells();
-
-            Serial.print("Module #");
-            Serial.print(y);
-            if (y < 10) Serial.print(" ");
-            //Serial.print("  ");
-            //Serial.print(modules[y].getModuleVoltage());
-            //Serial.print("V");
-            for (int i = 0; i < 6; i++)
-            {
-                if (cellNum < 10) Serial.print(" ");
-                Serial.print("  Cell");
-                if (cellNum < 10){Serial.print("0");}
-                Serial.print(cellNum++ + 1);
-                Serial.print(": ");
-                Serial.print(modules[y].getCellVoltage(i), 3);
-                Serial.print("V");
-                if (modules[y].getBalancingState(i) == 1) Serial.print("*");
-                else Serial.print(" ");
-            }
-            Serial.print("  Neg Term Temp: ");
-            Serial.print(modules[y].getTemperature(0));
-            Serial.print("C  Pos Term Temp: ");
-            Serial.print(modules[y].getTemperature(1));
-            Serial.print("C");
-            if(isFaulted) Serial.println(" FAULTED!");
-            else Serial.println("");
-        }
-    }
-}
-*/
 void BMSModuleManager::printPackDetails()
 {
     uint8_t faults;
@@ -919,190 +737,6 @@ void BMSModuleManager::printJsonData()
             Serial.println(msg);
         }
     }
-}
-String BMSModuleManager::buildJsonData()
-{
-    String jsonResponse = "{\"packs\":[";
-    bool firstModule = true;
-
-    for (int y = 1; y < 63; y++) {
-        if (modules[y].isExisting()) {
-            if (!firstModule) {
-                jsonResponse += ",";
-            }
-            firstModule = false;
-            jsonResponse += "{";
-            jsonResponse += "\"+\":\"" + String(modules[y].getTemperature(0), 2) + "\",";
-            jsonResponse += "\"-\":\"" + String(modules[y].getTemperature(1), 2) + "\",";
-
-            for (int i = 0; i < 6; i++) { // Loop through each cell in the module
-            jsonResponse += "\"c" + String(i + 1) + "\":\"";
-            jsonResponse += String(modules[y].getCellVoltage(i), 3); // Append cell voltage
-
-            if (modules[y].getBalancingState(i) == 1) { // Check if cell is balancing
-                jsonResponse += "*"; // Append asterisk if balancing
-            }
-
-            jsonResponse += "\""; // Close the value
-
-            if (i < 5) jsonResponse += ","; // Add a comma except for the last cell
-        }
-            jsonResponse += ",\"module\":\"" + String(y) + "\"";
-            jsonResponse += "}";
-        }
-    }
-    jsonResponse += "]}";
-
-    return jsonResponse;
-}
-
-void BMSModuleManager::handleBatteryStats(AsyncWebServerRequest* request, const String& bmsJson) {
-    request->send(200, "application/json", bmsJson);
-}
-
-void BMSModuleManager::broadcastBatteryStats(AsyncWebSocket* ws, const String& bmsJson){
-    ws->textAll(bmsJson);
-    //Serial.println("Broadcasted WS JSON");
-}
-
-void BMSModuleManager::sendBatteryStats(String systemName, String ftpServer, String ftpUser, String ftpPassword, const String& bmsJson) {
-    String systemNameLower = systemName;
-    systemNameLower.toLowerCase();
-
-    // Convert to C-style strings
-    char ftpServerChar[64];
-    char ftpUserChar[64];
-    char ftpPasswordChar[64];
-
-    ftpServer.toCharArray(ftpServerChar, sizeof(ftpServerChar));
-    ftpUser.toCharArray(ftpUserChar, sizeof(ftpUserChar));
-    ftpPassword.toCharArray(ftpPasswordChar, sizeof(ftpPasswordChar));
-
-    // File names
-    String tempFilename = systemNameLower + "_batterystats.json.tmp";
-    String finalFilename = systemNameLower + "_batterystats.json";
-    char tempChar[64];
-    char finalChar[64];
-    tempFilename.toCharArray(tempChar, sizeof(tempChar));
-    finalFilename.toCharArray(finalChar, sizeof(finalChar));
-
-    // This is the path on the ftp server where this system will drop off the  _batterystats.json file. Originally /tmp.
-    String path = ".";
-
-    ESP32_FTPClient* ftp = nullptr;  // Declare ftp pointer here so catch can see it
-
-    try {
-        ftp = new ESP32_FTPClient(ftpServerChar, ftpUserChar, ftpPasswordChar, 5000);
-
-        ftp->OpenConnection();
-
-        if (!ftp->isConnected()) {
-            Serial.println("FTP error: could not connect to server");
-            delete ftp;
-            ftp = nullptr;
-            return;
-        }
-
-
-        ftp->ChangeWorkDir(path.c_str());
-        ftp->InitFile("Type I");
-
-        ftp->NewFile(tempChar);
-        ftp->WriteData((uint8_t*)bmsJson.c_str(), bmsJson.length());
-        ftp->CloseFile();
-
-        ftp->RenameFile(tempChar, finalChar);
-//        Serial.println("FTP upload success: " + finalFilename);
-
-        ftp->CloseConnection();
-        delete ftp;
-        ftp = nullptr;
-
-    } catch (...) {
-        Serial.println("Unknown FTP error occurred");
-        if (ftp) {
-            ftp->CloseConnection();
-            delete ftp;
-            ftp = nullptr;
-        }
-    }
-}
-
-void BMSModuleManager::publishIndividualData(PubSubClient& client, const char* baseTopic, String systemName) {
-    for (int y = 1; y < 63; y++) {
-        if (!modules[y].isExisting()) {
-            continue;
-        }
-        // Publish cell voltages
-        for (int i = 0; i < 6; i++) {
-            String cellID = "p" + String(y) + "c" + String(i + 1);
-            String cellValue = String(modules[y].getCellVoltage(i), 3);
-            if(modules[y].getCellVoltage(i) > 2.5 && modules[y].getCellVoltage(i) < 4.29) {
-              publishSensorData(client, baseTopic, systemName, cellID, "voltage", "V", 3, cellValue);
-            }
-
-        }
-        // Publish temperatures
-        const String terminalIDs[] = {"_neg", "_pos"};
-        for (int t = 0; t < 2; t++) {
-            String cellID = "p" + String(y) + terminalIDs[t];
-            String cellValue = String(modules[y].getTemperature(t), 2);
-            if(modules[y].getTemperature(t) > -10 && modules[y].getTemperature(t) < 50) {
-              publishSensorData(client, baseTopic, systemName, cellID, "temperature", "°C", 2, cellValue);
-            }
-
-        }
-    }
-
-    // Publish system-wide max/min voltages and temperatures
-    const String cellMetrics[] = {"max_value", "min_value"};
-    const float cellValues[] = {highestCellVolt, lowestCellVolt};
-    for (int i = 0; i < 2; i++) {
-        if(cellValues[i] > 2.5 && cellValues[i] < 4.29){
-          publishSensorData(client, baseTopic, systemName, cellMetrics[i], "voltage", "V", 3, String(cellValues[i], 3));
-        }
-
-    }
-
-    const String tempMetrics[] = {"max_temp", "min_temp"};
-    const float tempValues[] = {highestPackTemp, lowestPackTemp};
-    for (int i = 0; i < 2; i++) {
-      if(tempValues[i] > -10 && tempValues[i] < 50) {
-        publishSensorData(client, baseTopic, systemName, tempMetrics[i], "temperature", "°C", 2, String(tempValues[i]));
-      }
-
-    }
-    //Serial.println("Published data to Home Assistant.");
-
-    // Debug summary
-    //Serial.println("");
-    //Serial.println("High temp: " + String(highestPackTemp));
-    //Serial.println("Low temp: " + String(lowestPackTemp));
-    //Serial.println("High volt: " + String(highestCellVolt));
-    //Serial.println("Low volt: " + String(lowestCellVolt));
-}
-
-void BMSModuleManager::publishSensorData(PubSubClient& client, const char* baseTopic, String systemName, const String& cellID, const String& devClass, const String& unit, const int precision, const String& value) {
-    String cellIDUpper = cellID;
-    String systemNameLower = systemName;
-    cellIDUpper.toUpperCase();
-    systemNameLower.toLowerCase();
-
-    String msg = "{\"name\":\"" + cellIDUpper + "\",\"dev_cla\":\"" + devClass + "\",\"unit_of_meas\":\"" + unit + "\",\"suggested_display_precision\":\"" + precision + "\",\"stat_t\":\"bms/sensor/" + systemNameLower + "_" +
-             cellID + "/state\",\"uniq_id\":\"" + systemNameLower + "_" + cellID + "\",\"dev\":{\"ids\":[\"" + systemNameLower + "_bms\"],\"name\":\"" + systemName + "\", \"mf\":\"Bobby Martin\"}}";
-
-    String config = baseTopic + systemNameLower + "_" + cellID + "/config";
-    String state = "bms/sensor/" + systemNameLower + "_" + cellID + "/state";
-
-    // Publish data
-    client.publish(config.c_str(), msg.c_str(), true);
-    client.publish(state.c_str(), value.c_str());
-
-    // Debug logs
-    //Serial.println("");
-    //Serial.println("Published Sensor: " + cellID);
-    //Serial.println(config + " | " + msg);
-    //Serial.println(state + " | " + value);
 }
 
 // ── Display data builder ──────────────────────────────────────────────────────

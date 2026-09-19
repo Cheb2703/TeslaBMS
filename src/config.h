@@ -90,15 +90,12 @@
 #define MAX_MODULE_ADDR     0x3E //0x3E
 
 #define EEPROM_VERSION      0x10    //update any time EEPROM struct below is changed.
-#define EEPROM_PAGE         0
 
 
 
 typedef struct {
     uint8_t version;
     uint8_t checksum;
-    uint32_t canSpeed;
-    uint8_t batteryID;  //which battery ID should this board associate as on the CAN bus
     uint8_t logLevel;
     float OverVSetpoint;
     float UnderVSetpoint;
@@ -108,40 +105,3 @@ typedef struct {
     float balanceHyst;
 } EEPROMSettings;
 
-/*
-These pin definitions are specific to the board that's in use.
-It appears they're not in use, however if the pin definitions are commented out,
-it makes the code in SystemIO.cpp not work, which breaks the whole thing - 
-i.e. logger throws "No modules responded to findBoards() - need to find out why later."
-*/
-// -- These are the pin definitions for ESP32-S3-WROOM1, N16R8 Variant--
-#define DIN1   5    // input
-#define DIN2   6    // input
-#define DIN3   7    // input
-#define DIN4   8    // input
-
-#define DOUT1_H 15
-#define DOUT1_L 9
-#define DOUT2_H 10
-#define DOUT2_L 11
-#define DOUT3_H 12
-#define DOUT3_L 13
-#define DOUT4_H 14
-#define DOUT4_L 18
-
-/* 
-// -- These are the pins for ESP32-WROOM-32D DevKit board HW-394 --
-#define DIN1   34   // input only
-#define DIN2   35   // input only
-#define DIN3   32   // input only
-#define DIN4   33   // input only
-
-#define DOUT1_H 25
-#define DOUT1_L 26
-#define DOUT2_H 27
-#define DOUT2_L 14
-#define DOUT3_H 12
-#define DOUT3_L 13
-#define DOUT4_H 15
-#define DOUT4_L 9 // changed this to 9 from 4, suspect its making LED not work properly
-*/

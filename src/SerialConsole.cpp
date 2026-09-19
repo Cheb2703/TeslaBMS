@@ -140,10 +140,7 @@ void SerialConsole::printMenu() {
     Logger::console("Enable line endings of some sort (LF, CR, CRLF)");
     Logger::console("Most commands case sensitive\n");
     Logger::console("GENERAL SYSTEM CONFIGURATION\n");
-    Logger::console("   E = dump system EEPROM values");
     Logger::console("   h = help (displays this message)");
-    Logger::console("   S = Sleep all boards");
-    Logger::console("   W = Wake up all boards");
     Logger::console("   C = Clear all board faults");
     Logger::console("   F = Find all connected boards");
     Logger::console("   R = Renumber connected boards in sequence");
@@ -157,7 +154,7 @@ void SerialConsole::printMenu() {
     Logger::console("   u = Toggle full-charge override");
     Logger::console("   p = Toggle output of pack summary every 3 seconds");
     Logger::console("   d = Toggle output of pack details every 3 seconds");
-    Logger::console("   j = display JSON Data every 3 seconds, toggle off");
+    Logger::console("   j = print each module's cell voltages and temperatures, one line per module");
 
     Logger::console("   LOGLEVEL=%i - set log level (0=debug, 1=info, 2=warn, 3=error, 4=off)", Logger::getLogLevel());
 
@@ -299,17 +296,7 @@ void SerialConsole::handleConfigCmd() {
     // (NVS) rather than RAM-only, so it survives a reboot with no WiFi/WebUI
     // needed -- this mirrors the same storage the WebUI already uses for
     // balanceVoltage/balanceHyst, just extended to the rest of the settings.
-    if (cmdString == String("CANSPEED")) {
-        if (newValue >= 33000 && newValue <= 1000000) {
-            uint32_t oldVal = settings.canSpeed;
-            settings.canSpeed = newValue;
-            preferences.begin("settings", false);
-            preferences.putUInt("canSpeed", settings.canSpeed);
-            preferences.end();
-            Logger::console("CANSPEED: was %l, now %l", oldVal, settings.canSpeed);
-        }
-        else Logger::console("Invalid speed. Enter a value between 33000 and 1000000");
-    } else if (cmdString == String("LOGLEVEL")) {
+    if (cmdString == String("LOGLEVEL")) {
         uint8_t oldVal = settings.logLevel;
         switch (newValue) {
         case 0:
@@ -340,17 +327,6 @@ void SerialConsole::handleConfigCmd() {
         preferences.putUChar("logLevel", settings.logLevel);
         preferences.end();
         Logger::console("LOGLEVEL: was %d, now %d", oldVal, settings.logLevel);
-    } else if (cmdString == String("BATTERYID")) {
-        if (newValue > 0 && newValue < 15) {
-            uint8_t oldVal = settings.batteryID;
-            settings.batteryID = newValue;
-            preferences.begin("settings", false);
-            preferences.putUChar("batteryID", settings.batteryID);
-            preferences.end();
-            //bms.setBatteryID();
-            Logger::console("BATTERYID: was %d, now %d", oldVal, settings.batteryID);
-        }
-        else Logger::console("Invalid battery ID. Please enter a value between 1 and 14");
     } else if (cmdString == String("VOLTLIMHI")) {
         if (newFloat >= 2.5f && newFloat <= CELL_VOLT_ABS_MAX) {
             float oldVal = settings.OverVSetpoint;
@@ -644,14 +620,6 @@ void SerialConsole::handleShortCmd() {
     case 'h': case '?': case 'H':
         printMenu();
         break;
-    case 's': case 'S':
-        Logger::console("Sleeping all connected boards");
-        bms.sleepBoards();
-        break;
-    case 'w': case 'W':
-        Logger::console("Waking up all connected boards");
-        bms.wakeBoards();
-        break;
     case 'c': case 'C':
         Logger::console("Clearing all faults");
         bms.clearFaults();
@@ -791,56 +759,3 @@ void SerialConsole::handleShortCmd() {
     }
 }
 
-/*
-    if (SERIALCONSOLE.available())
-    {
-        char y = SERIALCONSOLE.read();
-        switch (y)
-        {
-        case '1': //ascii 1
-            renumberBoardIDs();  // force renumber and read out
-            break;
-        case '2': //ascii 2
-            SERIALCONSOLE.println();
-            findBoards();
-            break;
-        case '3': //activate cell balance for 5 seconds
-            SERIALCONSOLE.println();
-            SERIALCONSOLE.println("Balancing");
-            cellBalance();
-            break;
-      case '4': //clear all faults on all boards, required after Reset or FPO (first power on)
-       SERIALCONSOLE.println();
-       SERIALCONSOLE.println("Clearing Faults");
-       clearFaults();
-      break;
-
-      case '5': //read out the status of first board
-       SERIALCONSOLE.println();
-       SERIALCONSOLE.println("Reading status");
-       readStatus(1);
-      break;
-
-      case '6': //Read out the limit setpoints of first board
-       SERIALCONSOLE.println();
-       SERIALCONSOLE.println("Reading Setpoints");
-       readSetpoint(1);
-       SERIALCONSOLE.println(OVolt);
-       SERIALCONSOLE.println(UVolt);
-       SERIALCONSOLE.println(Tset);
-      break;
-
-      case '0': //Send all boards into Sleep state
-       Serial.println();
-       Serial.println("Sleep Mode");
-       sleepBoards();
-      break;
-
-      case '9'://Pull all boards out of Sleep state
-       Serial.println();
-       Serial.println("Wake Boards");
-       wakeBoards();
-      break;
-        }
-    }
- */

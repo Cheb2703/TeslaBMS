@@ -9,27 +9,21 @@
 #include "SerialConsole.h"
 #include "config.h"
 #include "BMSModuleManager.h"
-#include "SystemIO.h"
 #include "Displaymanager.h"
 #include "Chargernpb.h"
 #include "Webui.h"
-//#include "MQTTClient.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
-//#include <PubSubClient.h>
 #include <ESPAsyncWebServer.h>
 #include <AsyncTCP.h>
-#include <WebSocketsServer.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <ArduinoOTA.h>
 #include <Update.h>
 #include <esp_task_wdt.h>
 #include "secrets.h"
-//#include <LittleFS.h> // Will be used later to host the Web frontend to show stats
 #include <Adafruit_NeoPixel.h> // To drive ws2812 LED
-//#include "esp_adc_cal.h" // For calibration to improve readings via ADC - not used in this project.
 
 // handleRoot()/handleUpdate() and the old inline route lambdas are gone --
 // all HTTP/WebSocket routes now live in WebUIManager (WebUI.h/.cpp), wired
@@ -85,11 +79,6 @@
 #define CHARGER_INIT_DAILY_V    24.0f   // 4.00V/cell x 6S -- everyday charge target (~80% SOC)
 #define CHARGER_INIT_FULL_V     24.9f   // 4.15V/cell x 6S -- full-charge override target
 
-// -- MQTT Auth configuration --
-#define MQTT_USER SECRET_MQTT_USER // update this in secrets.h
-#define MQTT_PASSWORD SECRET_MQTT_PASSWORD // update this in secrets.h
-#define MQTT_CLIENT_NAME "BMSClient"
-
 // -- Speed at which we talk to tesla BMBs --
 // Possible settings are 631578,612500,617647,608695
 #define BMS_BAUD        631578
@@ -125,13 +114,12 @@ AsyncWebServer server(80);
 DNSServer dnsServer;
 #define DNS_PORT 53
 AsyncWebSocket ws("/ws");
-BMSModuleManager bms(&server);
+BMSModuleManager bms;
 EEPROMSettings settings;
 SerialConsole console;
 uint32_t lastUpdate1;
 uint32_t lastUpdate2;
 uint32_t lastUpdate3;
-String bmsJson;
 float balanceVoltage = 3.95f;
 float balanceHyst = 0.007f;
 
@@ -161,16 +149,10 @@ float chargerDailyTargetV       = CHARGER_INIT_DAILY_V;
 float chargerFullTargetV        = CHARGER_INIT_FULL_V;
 bool  chargerFullChargeOverride = false;  // true = charging toward chargerFullTargetV instead of chargerDailyTargetV
 
-//const char* volt_str;
-//WiFiClient espClient;
-//PubSubClient client(espClient);
 unsigned long rebootTime = 0;
 int packsConfigured;
 String systemName = "esp32-teslabms";
 // -- Stuff below here needs to be configured in secrets.h --
-String ftpServer = SECRET_FTP_SERVER_IP;
-String ftpUser = SECRET_FTP_USER;
-String ftpPassword = SECRET_FTP_PASSWORD;
 String wifiSSID = SECRET_WIFI_SSID;
 String wifiPassword = SECRET_WIFI_PASSWORD;
 String apSSID = SECRET_AP_SSID;
@@ -180,8 +162,6 @@ String apPassword = SECRET_AP_PASSWORD;
 String mdnsHostname = "Lift";
 String webUsername = SECRET_WEBUI_USER;
 String webPassword = SECRET_WEBUI_PASS;
-String mqttServerIP = SECRET_MQTT_SERVER_IP;
-String mqtt_Topic = SECRET_MQTT_TOPIC;
 // -- Stuff above here needs to be configured in secrets.h --
 
 // The AP is ALWAYS up (this thing lives on an isolated AP most of its life --
@@ -248,17 +228,6 @@ uint32_t testFaultUntilMillis = 0;
 // (nothing is sent on the bus). Lets you check the NO COMMS fault and the
 // charger interlock without unplugging anything.
 uint32_t bmbSimCommLossUntilMs = 0;
-
-// ------------------ MQTT ------------------
-String mqttServer;
-const int mqttPort = 1883;
-int websocketsPort = 5081;
-int mqttRetryCount = 0;
-const int maxMqttRetries = 3;
-String mqttTopic = mqtt_Topic;
-const char* mqttClientName = MQTT_CLIENT_NAME;
-const char* mqttUser = MQTT_USER;
-const char* mqttPassword = MQTT_PASSWORD;
 
 // --- Function to manage LED behaviour ---
 void setLED(uint8_t r, uint8_t g, uint8_t b) {
@@ -379,33 +348,11 @@ void verifyChargerSettings() {
 #endif
 }
 
-// --- Attempt to connect to mqtt; fail and continue if it doesn't work after a few retries ---
-// void connectMQTT() {
-//     unsigned long startAttemptTime = millis();
-//     const unsigned long timeout = 3000;
-//     mqttRetryCount = 0; // Reset retry count
-//     while (mqttRetryCount < maxMqttRetries && (millis() - startAttemptTime) < timeout) {
-//         if (client.connect(
-//         (systemName + "_" + mqttClientName).c_str(), mqttUser, mqttPassword)) {
-//             mqttRetryCount = 0; // Reset on success
-//             return;
-//         } else {
-//             Serial.print("Failed with state ");
-//             Serial.println(client.state());
-//             mqttRetryCount++;
-//             delay(2000);
-//         }
-//     }
-//     Serial.println("Unable to connect to MQTT broker. Proceeding without MQTT.");
-// }
-
+// Sets the built-in default limits. setup() then loads any saved values over them.
 void loadSettings()
 {
-    Logger::console("Resetting to factory defaults");
     settings.version = EEPROM_VERSION;
     settings.checksum = 0;
-    settings.canSpeed = 500000;
-    settings.batteryID = 0x01; //in the future should be 0xFF to force it to ask for an address
     // 4.20V/cell over-voltage fault ceiling -- deliberately ABOVE the 4.15V/cell
     // full-charge override target (CHARGER_INIT_FULL_V), so an intentional full
     // charge doesn't trip this fault right as it reaches the target. 3.30V/cell
@@ -419,23 +366,6 @@ void loadSettings()
     settings.logLevel = 1;
     Logger::setLoglevel((Logger::LogLevel)settings.logLevel);
 }
-
-/* - CAN bus code - not used - needs to be cleaned up in the future.
-void initializeCAN()
-{
-    uint32_t id;
-    CAN0.begin(settings.canSpeed);
-    if (settings.batteryID < 0xF)
-    {
-        //Setup filter for direct access to our registered battery ID
-        id = (0xBAul << 20) + (((uint32_t)settings.batteryID & 0xF) << 16);
-        CAN0.setRXFilter(0, id, 0x1FFF0000ul, true);
-        //Setup filter for request for all batteries to give summary data
-        id = (0xBAul << 20) + (0xFul << 16);
-        CAN0.setRXFilter(1, id, 0x1FFF0000ul, true);
-    }
-}
-*/
 
 void setup()
 {
@@ -453,7 +383,6 @@ void setup()
     preferences.begin("settings", true); // "settings" is the namespace
 
     // Load saved settings
-    mqttServer = preferences.getString("mqttServer", mqttServerIP);
     systemName = preferences.getString("systemName", systemName);   // was no default: blank name on first boot
     wifiSSID = preferences.getString("wifiSSID", wifiSSID);
     wifiPassword = preferences.getString("wifiPassword", wifiPassword);
@@ -463,9 +392,6 @@ void setup()
     balanceVoltage = preferences.getFloat("balanceVoltage", 3.95f);
     balanceHyst = preferences.getFloat("balanceHyst", 0.007f);
     packsConfigured = preferences.getInt("packsConfigured", DEFAULT_PACKS_CONFIGURED);
-    ftpPassword = preferences.getString("ftpPassword", ftpPassword);
-    ftpUser = preferences.getString("ftpUser", ftpUser);
-    ftpServer = preferences.getString("ftpServer", ftpServer);
     webUsername = preferences.getString("webUsername", webUsername);
     webPassword = preferences.getString("webPassword", webPassword);
     preferences.end();
@@ -585,8 +511,8 @@ void setup()
     settings.balanceVoltage = balanceVoltage;
     settings.balanceHyst    = balanceHyst;
     // Load the remaining serial-configurable settings too, so anything set via
-    // the console (VOLTLIMHI, VOLTLIMLO, TEMPLIMHI, TEMPLIMLO, CANSPEED,
-    // BATTERYID, LOGLEVEL) survives a reboot even with no WiFi/WebUI access.
+    // the console (VOLTLIMHI, VOLTLIMLO, TEMPLIMHI, TEMPLIMLO, LOGLEVEL)
+    // survives a reboot even with no WiFi/WebUI access.
     // Falls back to whatever loadSettings() already put in place if no saved
     // value exists yet.
     settings.OverVSetpoint  = preferences.getFloat("overVSetpoint",  settings.OverVSetpoint);
@@ -594,8 +520,6 @@ void setup()
     settings.UnderVSetpoint = preferences.getFloat("underVSetpoint", settings.UnderVSetpoint);
     settings.OverTSetpoint  = preferences.getFloat("overTSetpoint",  settings.OverTSetpoint);
     settings.UnderTSetpoint = preferences.getFloat("underTSetpoint", settings.UnderTSetpoint);
-    settings.canSpeed       = preferences.getUInt("canSpeed",        settings.canSpeed);
-    settings.batteryID      = preferences.getUChar("batteryID",      settings.batteryID);
     settings.logLevel       = preferences.getUChar("logLevel",       settings.logLevel);
     Logger::setLoglevel((Logger::LogLevel)settings.logLevel); // re-apply in case a saved value overrode loadSettings()'s default
 
@@ -632,8 +556,6 @@ void setup()
     preferences.end();
 
     Serial.println("Loaded settings from flash (NVS):");
-    Serial.printf("  CANSPEED:   %lu\r\n", (unsigned long)settings.canSpeed);
-    Serial.printf("  BATTERYID:  %u\r\n",  settings.batteryID);
     Serial.printf("  LOGLEVEL:   %u\r\n",  settings.logLevel);
     Serial.printf("  VOLTLIMHI:  %.3f\r\n", settings.OverVSetpoint);
     Serial.printf("  VOLTLIMLO:  %.3f\r\n", settings.UnderVSetpoint);
@@ -651,10 +573,6 @@ void setup()
     Serial.printf("  CHGCCTO:    %u\r\n",   chargerCCTimeoutMin);
     Serial.printf("  CHGCVTO:    %u\r\n",   chargerCVTimeoutMin);
     Serial.printf("  CHGFVTO:    %u\r\n",   chargerFVTimeoutMin);
-//  Serial.println("Initialize CAN");
-//  initializeCAN();
-    Serial.println("System IO setup");
-    // systemIO.setup();  // disabled -- conflicts with LCD pins (10-14); re-enable once DOUT is remapped to 21-24 pool for load-disconnect relay work
     Serial.println("Done.");
 
     // -- Charger CAN bring-up --
@@ -755,14 +673,6 @@ void setup()
     Serial.printf("Loaded balanceHyst: %.3f\r\n", settings.balanceHyst);
     delay(1000);
 
-    // -- Connect to MQTT broker --
-    // client.setBufferSize(512);
-    // client.setServer(mqttServer.c_str(), mqttPort);
-    // client.setCallback(callback);
-    // if (WiFi.status() == WL_CONNECTED && !client.connected()) {
-    //     connectMQTT();
-    // }
-
     // All HTTP/WebSocket routes (the new single-page app, live telemetry
     // push, settings/charger JSON APIs, firmware upload) are registered here.
     webUI.begin(&server, &ws);
@@ -828,18 +738,6 @@ void setup()
     enableLoopWDT();
     Serial.printf("Loop watchdog enabled (%d s)\r\n", LOOP_WDT_TIMEOUT_S);
 }
-
-/*
-void callback(char* topic, byte* payload, unsigned int length) {
-    Serial.print("Message arrived on topic: ");
-    Serial.println(topic);
-    Serial.print("Message: ");
-    for (int i = 0; i < length; i++) {
-        Serial.print((char)payload[i]);
-    }
-    Serial.println();
-}
-*/
 
 //Buzzer
 void updateBuzzer(bool active) {
@@ -1106,16 +1004,10 @@ void loop()
         if (WiFi.status() == WL_CONNECTED) {
             flashBlue(3);
 
-            // if (!client.connected()) {
-            //     connectMQTT();
-            // }
-
             bms.getAllVoltTemp();
             bms.balanceCells(false); // getAllVoltTemp() just read every module -- don't read them all a second time
             charger.poll();   // refresh charger V/I/temp/fault snapshot
             enforceChargerDesiredState(); // catch charger drifting from our commanded state (e.g. AC-cycle auto-restart)
-            //String volt_str = bms.csvData();
-            //client.publish(mqttTopic, volt_str.c_str());
         } else {
             // Still poll BMS when Wi-Fi is absent so the display stays live
             bms.getAllVoltTemp();
@@ -1169,24 +1061,8 @@ void loop()
     if (millis() - lastUpdate2 >= 10000) {
         lastUpdate2 = millis();
 
-        // -- debug statistics - keep commented if not needed to prevent noise in serial log --
-        /*
-        printChipTemp();
-        Serial.println("");
-        Serial.print("Free heap: ");
-        Serial.print(ESP.getFreeHeap() / 1024);
-        Serial.println(" kB");
-        */
-
         if (WiFi.status() == WL_CONNECTED) {
             flashBlue(3);
-
-            // if (numFoundModules == packsConfigured) {
-            //     bms.publishIndividualData(client, "homeassistant/sensor/bms/", systemName);
-            //     bmsJson = bms.buildJsonData();
-            //     bms.sendBatteryStats(systemName, ftpServer, ftpUser, ftpPassword, bmsJson);
-            //     bms.broadcastBatteryStats(&ws, bmsJson);
-            // }
         }
 
         // Re-scan for missing modules. Renumbering resets EVERY board on the ring,

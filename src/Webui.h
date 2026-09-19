@@ -105,7 +105,7 @@ extern WebSerialTee webSerialTee;
 //      is the most likely source of the "crashes sometimes" symptom). A
 //      WiFi-credential change instead sets a flag that loop() acts on.
 //    - Passwords are write-only: GET /api/settings never echoes back
-//      wifiPassword/webPassword/apPassword/ftpPassword. The UI shows them
+//      wifiPassword/webPassword/apPassword. The UI shows them
 //      as blank with a "leave blank to keep" placeholder; blank on submit
 //      means "don't change".
 // ─────────────────────────────────────────────────────────────────────────────
