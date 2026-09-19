@@ -200,3 +200,9 @@ Connect over USB at 115200 baud, or use the Console tab in the web UI. Type `h` 
 - Check every charger and cell limit against your own pack before charging. The defaults are for one specific 6S setup.
 - Firmware updates over Wi-Fi are not password protected by default (see [Open by default](#open-by-default-no-wi-fi-password-no-login)).
 - Nothing here is certified for any purpose. You are responsible for what you build.
+
+## License
+
+Released under the [MIT License](LICENSE): you may use, change and share this code, including commercially, as long as the copyright notice and license text stay with it. It comes with no warranty.
+
+Some files carry their original authors' copyright notices at the top (`Logger.h`, `Logger.cpp`, `SerialConsole.h`, `SerialConsole.cpp`, by Collin Kidder and others, also under the MIT License). Those notices must be kept. See [Credits](#credits) for the projects this one is built on.
