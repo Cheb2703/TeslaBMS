@@ -135,6 +135,8 @@ Set **Packs configured** in the Settings tab to the number of Tesla modules you 
 - a module has not answered for about 10 seconds (`NO COMMS`),
 - a module's temperature sensor gives an impossible reading (`TEMP SENSOR`).
 
+While modules are missing, the BMS keeps trying to find them. Each attempt resets the boards, so it tries after 10 seconds, then 20, 40, and then once a minute, going back to 10 seconds once they are all found.
+
 ### What the LED and buzzer mean
 
 The LED is the RGB LED built into the ESP32-S3 dev board. The firmware drives it on GPIO 48 (`PIN` in `src/main.cpp`), which is where the original ESP32-S3-DevKitC-1 has it. Espressif's newer v1.1 revision uses GPIO 38 instead, so if your LED never lights, change `PIN` there.
@@ -153,6 +155,8 @@ The charger is controlled from the Charging tab (or the serial console):
 - **Daily target** is the everyday charge voltage (default 24.0V for a 6S pack, about 80%).
 - **Full-charge override** charges to a higher target (default 24.9V) once, and returns to the daily target when the charger reports it is full.
 - Curve settings, timeouts and the charger output switch are all on the same tab.
+
+Each time the charger switches on, the firmware reads its charge settings (current, voltage, float, taper) back and writes to the log whether they match what was sent. By default a mismatch is only logged; set `CHARGER_VERIFY_TURNS_OFF` to `1` in `src/config.h` to also switch the charger off.
 
 Whenever a BMS fault is active, the charger output is forced off, and it is not possible to switch it on. When the fault clears, the charger returns to the state it was in before: if it was running it turns back on by itself, and if it was off it stays off. After a reboot or power cut the charger always starts off.
 

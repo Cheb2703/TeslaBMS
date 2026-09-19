@@ -355,6 +355,29 @@ void applyChargeTargetVoltage() {
     }
 }
 
+// Set when the charger output has just switched ON; loop() then reads the
+// curve settings back once (see the 3-second block).
+bool chargerVerifyPending = false;
+
+// Reads CURVE_CC/CV/FV/TC back from the charger and checks it is really using
+// what we sent. loop() context only (shares the CAN receive queue with poll()).
+void verifyChargerSettings() {
+    if (charger.verifyCurve(chargerCurveCC, chargerCurveCV, chargerCurveFV, chargerCurveTC)) {
+        Logger::info("Charger read-back OK: CC=%f A  CV=%f V  FV=%f V  TC=%f A",
+                     chargerCurveCC, chargerCurveCV, chargerCurveFV, chargerCurveTC);
+        return;
+    }
+    Logger::error("Charger settings do NOT match what was sent -- it may not be charging to the intended limits");
+#if CHARGER_VERIFY_TURNS_OFF
+    desiredChargerOn = false;
+    resumeChargerAfterFault = false;
+    if (charger.setOutput(false))
+        Logger::error("Charger output switched OFF because of the mismatch");
+    else
+        Logger::error("Could not switch the charger OFF -- charger not responding, will retry");
+#endif
+}
+
 // --- Attempt to connect to mqtt; fail and continue if it doesn't work after a few retries ---
 // void connectMQTT() {
 //     unsigned long startAttemptTime = millis();
@@ -430,7 +453,7 @@ void setup()
 
     // Load saved settings
     mqttServer = preferences.getString("mqttServer", mqttServerIP);
-    systemName = preferences.getString("systemName");
+    systemName = preferences.getString("systemName", systemName);   // was no default: blank name on first boot
     wifiSSID = preferences.getString("wifiSSID", wifiSSID);
     wifiPassword = preferences.getString("wifiPassword", wifiPassword);
     apSSID = preferences.getString("apSSID", apSSID);
@@ -1071,7 +1094,7 @@ void loop()
             // }
 
             bms.getAllVoltTemp();
-            bms.balanceCells();
+            bms.balanceCells(false); // getAllVoltTemp() just read every module -- don't read them all a second time
             charger.poll();   // refresh charger V/I/temp/fault snapshot
             enforceChargerDesiredState(); // catch charger drifting from our commanded state (e.g. AC-cycle auto-restart)
             //String volt_str = bms.csvData();
@@ -1079,9 +1102,26 @@ void loop()
         } else {
             // Still poll BMS when Wi-Fi is absent so the display stays live
             bms.getAllVoltTemp();
-            bms.balanceCells();
+            bms.balanceCells(false); // getAllVoltTemp() just read every module -- don't read them all a second time
             charger.poll();   // refresh charger V/I/temp/fault snapshot
             enforceChargerDesiredState(); // catch charger drifting from our commanded state (e.g. AC-cycle auto-restart)
+        }
+
+        // Charger settings read-back. Each time the output goes from OFF to ON
+        // (from any path: web UI, console, fault-resume, drift correction), read
+        // the curve registers back once and check the charger really has what we
+        // sent. Done here, in loop(), because reading shares the CAN receive queue
+        // with charger.poll(); done after switch-on because the curve registers
+        // only latch on the on/off toggle.
+        {
+            static bool chargerWasOn = false;
+            bool isOn = chargerReady && charger.data().online && charger.data().outputOn;
+            if (isOn && !chargerWasOn) chargerVerifyPending = true;
+            chargerWasOn = isOn;
+            if (chargerVerifyPending && isOn) {
+                chargerVerifyPending = false;
+                verifyChargerSettings();
+            }
         }
 
         // Full-charge override auto-revert: once the charger itself reports
@@ -1132,17 +1172,32 @@ void loop()
             // }
         }
 
-        if (numFoundModules < packsConfigured) {
+        // Re-scan for missing modules. Renumbering resets EVERY board on the ring,
+        // so don't do it every 10 s forever: back off (10 s, 20 s, 40 s, then
+        // once a minute) while modules are still missing, and start again at
+        // 10 s once they are all back.
+        static uint32_t nextRescanMs = 0;
+        static uint32_t rescanBackoffMs = 10000;
+        if (numFoundModules >= packsConfigured) {
+            rescanBackoffMs = 10000;
+        } else if ((int32_t)(millis() - nextRescanMs) >= 0) {
             bms.findBoards();
             bms.renumberBoardIDs();
+            // The ring reset above leaves a power-on-reset flag in every board.
+            // Those flags stay latched (and hold the charger off) until cleared,
+            // so clear them, exactly as setup() does after its own renumber.
+            bms.clearFaults();
             if (numFoundModules < packsConfigured) {
                 Serial.println("Found " + String(numFoundModules) + " out of " + String(packsConfigured) + " packs. Restarting search.");
                 Serial.println("Check connections - BMB RX / TX pins are set to " + String(BMB_RX_PIN) + " / " + String(BMB_TX_PIN));
                 flashPurple(3);
+                rescanBackoffMs = (rescanBackoffMs >= 30000) ? 60000 : rescanBackoffMs * 2;
             } else {
                 Serial.println("Found all " + String(numFoundModules) + " packs! Search ended.");
                 flashGreen(3);
+                rescanBackoffMs = 10000;
             }
+            nextRescanMs = millis() + rescanBackoffMs;
         }
     }
 }

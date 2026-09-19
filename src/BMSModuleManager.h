@@ -33,7 +33,7 @@ class BMSModuleManager
 public:
     BMSModuleManager(AsyncWebServer* webServer);
     //BMSModuleManager();
-    void balanceCells();
+    void balanceCells(bool refreshReadings = true);   // false = use the values getAllVoltTemp() just read
     void balanceCell(int cellNumber);
     void setupBoards();
     void findBoards();

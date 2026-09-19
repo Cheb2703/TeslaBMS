@@ -54,14 +54,14 @@
 //   Default Vboost / Vfloat          : 28.8 V / 27.6 V
 #define NPB24_VOLT_MIN      21.0f
 #define NPB24_VOLT_MAX      42.0f
+#define NPB24_CURR_MIN       0.0f
+#define NPB24_CURR_MAX      22.5f
 
 // The highest charge voltage this pack may be asked for: the lower of the
 // charger's own limit (NPB24_VOLT_MAX) and CELLS_IN_SERIES x the cell
 // over-voltage limit. Defined in main.cpp. Every voltage setpoint is clamped
 // to this, both where it is entered (web UI / console) and in the driver.
 float chargerVoltMax();
-#define NPB24_CURR_MIN       0.0f
-#define NPB24_CURR_MAX      22.5f
 
 // ── Command codes (datasheet CANBus command list, pages 9-10) ───────────────
 enum NPBCmd : uint16_t {
@@ -229,6 +229,13 @@ public:
     // took, rather than trusting the ESP32's own memory of what it sent.
     bool readVoltageSetpoint(float& out);   // VOUT_SET readback (0x0020)
     bool readCurrentSetpoint(float& out);   // IOUT_SET readback (0x0030)
+
+    // Reads CURVE_CC / CURVE_CV / CURVE_FV / CURVE_TC back from the charger and
+    // compares each with what setCurveXX() would have sent for these values.
+    // Returns true only if all four replied and matched. Logs each mismatch.
+    // Call it from loop() only: like poll(), it reads the CAN receive queue, so
+    // calling it from the web server's task could steal poll()'s replies.
+    bool verifyCurve(float cc, float cv, float fv, float tc);
 
     // Convenience: refresh the whole ChargerData snapshot in one call.
     void poll();

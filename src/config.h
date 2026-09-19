@@ -34,6 +34,12 @@
 // can take about 8 s, and a poll with several unresponsive modules a few more).
 #define LOOP_WDT_TIMEOUT_S        30
 
+// Each time the charger output switches on, its curve settings (CC/CV/FV/TC)
+// are read back and compared with what was sent. If they don't match:
+//   0 = only write an error to the log (default while this is being proven)
+//   1 = also switch the charger off and leave it off
+#define CHARGER_VERIFY_TURNS_OFF  0
+
 // A module that fails this many 3-second read cycles in a row (about 10 s)
 // raises a communication fault, so the charger is not left running on stale
 // readings if a BMB cable comes loose or a board stops answering.

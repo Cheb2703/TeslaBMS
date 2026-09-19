@@ -313,6 +313,37 @@ void ChargerNPB::poll() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  verifyCurve — read the curve registers back and compare. The setters above
+//  only confirm a frame was QUEUED, not that the charger accepted it; a dropped
+//  write would leave the charger charging to whatever it had before (the
+//  factory boost default is 28.8 V, far above a 6S pack's 25.2 V).
+// ─────────────────────────────────────────────────────────────────────────────
+bool ChargerNPB::verifyCurve(float cc, float cv, float fv, float tc) {
+    // Same clamping and scaling as the setCurveXX() functions, so "expected"
+    // is exactly what those would have written.
+    const struct { const char* name; uint16_t cmd; uint16_t want; } checks[] = {
+        { "CC", NPB_CURVE_CC, (uint16_t)(clampf(cc, NPB24_CURR_MIN, NPB24_CURR_MAX) * 100.0f + 0.5f) },
+        { "CV", NPB_CURVE_CV, (uint16_t)(clampf(cv, NPB24_VOLT_MIN, chargerVoltMax()) * 100.0f + 0.5f) },
+        { "FV", NPB_CURVE_FV, (uint16_t)(clampf(fv, NPB24_VOLT_MIN, chargerVoltMax()) * 100.0f + 0.5f) },
+        { "TC", NPB_CURVE_TC, (uint16_t)(clampf(tc, NPB24_CURR_MIN, NPB24_CURR_MAX) * 100.0f + 0.5f) },
+    };
+
+    bool allOk = true;
+    for (const auto& c : checks) {
+        uint16_t got = 0;
+        if (!requestValue(c.cmd, got)) {
+            Logger::error("Charger read-back: no reply for CURVE_%s", c.name);
+            allOk = false;
+        } else if (got != c.want) {
+            Logger::error("Charger read-back MISMATCH CURVE_%s: charger has %f, we sent %f",
+                          c.name, got * 0.01f, c.want * 0.01f);
+            allOk = false;
+        }
+    }
+    return allOk;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  logBusStatus — dump TWAI-level health, independent of whether the charger
 //  ever sends back data we recognize. This tells us whether anything on the
 //  bus is ACKing our frames at the CAN protocol level at all.

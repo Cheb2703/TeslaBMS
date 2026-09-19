@@ -147,8 +147,7 @@ void SerialConsole::printMenu() {
     Logger::console("   C = Clear all board faults");
     Logger::console("   F = Find all connected boards");
     Logger::console("   R = Renumber connected boards in sequence");
-    Logger::console("   B = Manual start balancing");
-    Logger::console("   b = Manual stop balancing");
+    Logger::console("   B or b = Run a balancing pass now (it also runs automatically every few seconds)");
     Logger::console("   1 to 6 = Toggle balancing on cell 1 to 6");
     Logger::console("   t = Inject a 5-second test fault (verify buzzer/display/history)");
     Logger::console("   x = Simulate losing contact with all BMB modules for 40 s (tests the NO COMMS fault)");

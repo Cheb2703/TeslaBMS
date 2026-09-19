@@ -60,14 +60,14 @@ BMSModuleManager::BMSModuleManager(AsyncWebServer* webServer)
 //         }
 //     }
 // }
-void BMSModuleManager::balanceCells()
+void BMSModuleManager::balanceCells(bool refreshReadings)
 {
     float lowestCell = 10.0f;
     for (int x = 1; x <= MAX_MODULE_ADDR; x++) // Start cycling through packs
     {
         if (modules[x].isExisting()) // Process only if the module exists
         {
-            modules[x].readModuleValues(); // Get module data
+            if (refreshReadings) modules[x].readModuleValues(); // Get module data
 
             if (x % 2 != 0)  // If this is an odd-numbered pack, initialize lowestCell tracking
             {
