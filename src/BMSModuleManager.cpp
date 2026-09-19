@@ -11,6 +11,7 @@
 #include <ESP32_FTPClient.h> // FTP Client library
 
 extern EEPROMSettings settings;
+extern int packsConfigured;   // how many modules the user says the pack has (main.cpp)
 int numFoundModules = 0;
 float lowestCellVolt;
 float highestCellVolt;
@@ -34,6 +35,7 @@ BMSModuleManager::BMSModuleManager(AsyncWebServer* webServer)
         faultList[i].reason[0] = '\0';
         faultList[i].startMillis = 0;
     }
+    memset(commFails, 0, sizeof(commFails));
     server = webServer;
 }
 
@@ -417,6 +419,7 @@ void BMSModuleManager::getAllVoltTemp()
             // Try reading the module values, retrying if necessary
             if (modules[x].readModuleValues()) {
                 // Only process the module if the data was successfully read
+                commFails[x] = 0;
                 Logger::debug("Module voltage: %f", modules[x].getModuleVoltage());
                 Logger::debug("Lowest Cell V: %f     Highest Cell V: %f", modules[x].getLowCellV(), modules[x].getHighCellV());
                 Logger::debug("Temp1: %f       Temp2: %f", modules[x].getTemperature(0), modules[x].getTemperature(1));
@@ -486,10 +489,36 @@ void BMSModuleManager::getAllVoltTemp()
                 } else {
                     clearFaultById(idUT);
                 }
+
+                // A shorted or open thermistor gives NaN, which would slip past
+                // both temperature checks above. Report it as its own fault.
+                char idSens[12], sReason[40];
+                snprintf(idSens, sizeof(idSens), "M%dSENS", x);
+                if (!modules[x].hasValidTemperatures()) {
+                    snprintf(sReason, sizeof(sReason), "MOD%d TEMP SENSOR", x);
+                    reportFault(idSens, sReason);
+                    Logger::error("%s", sReason);
+                } else {
+                    clearFaultById(idSens);
+                }
             }
             else {
                 // Log failure to read module
                 Logger::error("Failed to read module %i. Skipping module...", x);
+                if (commFails[x] < 255) commFails[x]++;
+            }
+
+            // A module that keeps failing to answer can't be supervised: its
+            // cell values above are stale. After BMB_COMM_FAIL_LIMIT failed
+            // cycles in a row, raise a fault so the charger interlock trips
+            // instead of charging on old readings. Clears on the next good read.
+            char idComm[12], cReason[40];
+            snprintf(idComm, sizeof(idComm), "M%dCOMM", x);
+            if (commFails[x] >= BMB_COMM_FAIL_LIMIT) {
+                snprintf(cReason, sizeof(cReason), "MOD%d NO COMMS", x);
+                reportFault(idComm, cReason);
+            } else {
+                clearFaultById(idComm);
             }
 
             // Check the module's fault register regardless of whether the
@@ -520,6 +549,35 @@ void BMSModuleManager::getAllVoltTemp()
     // (~20V) rather than a fictitious series total (~41V).
     if (moduleReadCount > 0) packVolt /= moduleReadCount;
 
+    // Fewer modules than the user says the pack has means some cells are not
+    // being monitored (or the BMB ring is broken), so hold the charger off.
+    // (Extra modules beyond the configured count are still monitored, so they
+    // don't raise this.)
+    if (numFoundModules < packsConfigured) {
+        char mReason[40];
+        snprintf(mReason, sizeof(mReason), "MODULES %d/%d FOUND", numFoundModules, packsConfigured);
+        reportFault("MODS", mReason);
+    } else {
+        clearFaultById("MODS");
+    }
+
+    // Faults are only cleared for modules that still exist (above), so a fault
+    // belonging to a module that has since dropped out of the ring would stay
+    // stuck on forever. Per-module fault ids all start with "M<number>"; drop
+    // any whose module no longer exists. (The missing module itself is what
+    // the MODS fault above reports.)
+    for (int x = 1; x <= MAX_MODULE_ADDR; x++) {
+        if (!modules[x].isExisting()) commFails[x] = 0;
+    }
+    for (int i = 0; i < MAX_ACTIVE_FAULTS; i++) {
+        if (faultList[i].active && faultList[i].id[0] == 'M' && isdigit((unsigned char)faultList[i].id[1])) {
+            int m = atoi(&faultList[i].id[1]);
+            if (m >= 1 && m <= MAX_MODULE_ADDR && !modules[m].isExisting()) {
+                faultList[i].active = false;
+            }
+        }
+    }
+
     // Update the overall pack voltage bounds
     if (packVolt > highestPackVolt) highestPackVolt = packVolt;
     if (packVolt < lowestPackVolt) lowestPackVolt = packVolt;
@@ -546,6 +604,7 @@ float BMSModuleManager::getPackVoltage()
 
 float BMSModuleManager::getAvgTemperature()
 {
+    if (numFoundModules <= 0) return 0.0f;   // avoid 0/0 = NaN when no modules are found
     float avg = 0.0f;
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {
@@ -558,6 +617,7 @@ float BMSModuleManager::getAvgTemperature()
 
 float BMSModuleManager::getAvgCellVolt()
 {
+    if (numFoundModules <= 0) return 0.0f;   // avoid 0/0 = NaN when no modules are found
     float avg = 0.0f;
     for (int x = 1; x <= MAX_MODULE_ADDR; x++)
     {

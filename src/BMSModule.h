@@ -4,7 +4,7 @@ class BMSModule
 {
 public:
     BMSModule();
-    void readStatus();
+    bool readStatus();          // false = no valid reply; fault/alert flags left unchanged
     void stopBalance();
     bool readModuleValues();
     float getCellVoltage(int cell);
@@ -22,6 +22,7 @@ public:
     float getAvgTemp();
     float getModuleVoltage();
     float getTemperature(int temp);
+    bool hasValidTemperatures();  // false if either thermistor reading is NaN/inf (open or shorted sensor)
     uint8_t getFaults();
     uint8_t getAlerts();
     uint8_t getCOVCells();

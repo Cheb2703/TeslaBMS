@@ -11,6 +11,17 @@
 #define AP_REQUIRE_PASSWORD  0   // 0 = open Wi-Fi access point (no password)
 #define WEBUI_REQUIRE_AUTH   0   // 0 = web UI without username/password prompt
 
+// -- BMS supervision -----------------------------------------------------------
+// How many Tesla modules the pack has. This is only the first-boot default;
+// change it in the web UI Settings tab afterwards. If fewer modules than this
+// are found, a fault is raised and the charger is held off.
+#define DEFAULT_PACKS_CONFIGURED  2
+
+// A module that fails this many 3-second read cycles in a row (about 10 s)
+// raises a communication fault, so the charger is not left running on stale
+// readings if a BMB cable comes loose or a board stops answering.
+#define BMB_COMM_FAIL_LIMIT       3
+
 //extern HardwareSerial Serial1; // Leftover from back in the day when this ran on arduino
 
 //Set to the proper port for your USB connection - SerialUSB on Due (Native) or Serial for Due (Programming) or Teensy

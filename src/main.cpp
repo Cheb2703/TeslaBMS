@@ -413,7 +413,7 @@ void setup()
     mdnsHostname = preferences.getString("mdnsHostname", mdnsHostname);
     balanceVoltage = preferences.getFloat("balanceVoltage", 3.95f);
     balanceHyst = preferences.getFloat("balanceHyst", 0.007f);
-    packsConfigured = preferences.getInt("packsConfigured", 16);
+    packsConfigured = preferences.getInt("packsConfigured", DEFAULT_PACKS_CONFIGURED);
     ftpPassword = preferences.getString("ftpPassword", ftpPassword);
     ftpUser = preferences.getString("ftpUser", ftpUser);
     ftpServer = preferences.getString("ftpServer", ftpServer);

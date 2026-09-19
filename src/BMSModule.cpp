@@ -23,6 +23,10 @@ BMSModule::BMSModule()
     highestModuleVolt = 0.0f;
     exists = false;
     moduleAddress = 0;
+    alerts = 0;
+    faults = 0;
+    COVFaults = 0;
+    CUVFaults = 0;
     goodPackets = 0;
     badPackets = 0;
 }
@@ -30,18 +34,25 @@ BMSModule::BMSModule()
 /*
 Reading the status of the board to identify any flags, will be more useful when implementing a sleep cycle
 */
-void BMSModule::readStatus()
+bool BMSModule::readStatus()
 {
   uint8_t payload[3];
-  uint8_t buff[8];
+  uint8_t buff[8] = {0};
   payload[0] = moduleAddress << 1; //adresss
   payload[1] = REG_ALERT_STATUS;//Alert Status start
   payload[2] = 0x04;
-  BMSUtil::sendDataWithReply(payload, 3, false, buff, 7);
+  int retLen = BMSUtil::sendDataWithReply(payload, 3, false, buff, 7);
+
+  // A short or mis-addressed reply is not a real status block. Before, the
+  // bytes below were used regardless, so a lost reply turned leftover memory
+  // into made-up (or hidden) faults. Keep the previous values instead.
+  if (retLen != 7 || buff[0] != (moduleAddress << 1)) return false;
+
   alerts = buff[3];
   faults = buff[4];
   COVFaults = buff[5];
   CUVFaults = buff[6];
+  return true;
 }
 
 uint8_t BMSModule::getFaults()
@@ -106,7 +117,7 @@ bool BMSModule::readModuleValues()
 
     payload[0] = moduleAddress << 1;
 
-    readStatus();
+    if (!readStatus()) Logger::warn("Module %i: status read failed, keeping previous fault flags", moduleAddress);
     Logger::debug("Module %i   alerts=%X   faults=%X   COV=%X   CUV=%X", moduleAddress, alerts, faults, COVFaults, CUVFaults);
 
     payload[1] = REG_ADC_CTRL;
@@ -358,6 +369,15 @@ float BMSModule::getTemperature(int temp)
 {
     if (temp < 0 || temp > 1) return 0.0f;
     return temperatures[temp];
+}
+
+// The Steinhart-Hart conversion in readModuleValues() takes logf() of a value
+// that goes negative when a thermistor is shorted, giving NaN. NaN fails every
+// ">" and "<" comparison, so the over/under-temperature limits would silently
+// never fire. This lets the caller flag that case as a sensor fault instead.
+bool BMSModule::hasValidTemperatures()
+{
+    return isfinite(temperatures[0]) && isfinite(temperatures[1]);
 }
 
 void BMSModule::setAddress(int newAddr)

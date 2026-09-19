@@ -77,6 +77,7 @@ private:
     BMSModule modules[MAX_MODULE_ADDR + 1]; // store data for as many modules as we've configured for.
 
     FaultRecord faultList[MAX_ACTIVE_FAULTS];
+    uint8_t commFails[MAX_MODULE_ADDR + 1]; // consecutive failed read cycles per module (see BMB_COMM_FAIL_LIMIT)
     int CellsBalancing;
     AsyncWebServer* server;
     

@@ -17,7 +17,9 @@ static const uint8_t OCV_SOC[] = { 0,   3,   7,  12,  28,
 static const int OCV_POINTS = 11;
 
 uint8_t estimateSoC(float v) {
-    if (v <= OCV_VOLT[0])              return 0;
+    // "!(v > x)" instead of "v <= x" so a NaN also returns 0. NaN fails every
+    // comparison and used to fall through to the final "return 100".
+    if (!(v > OCV_VOLT[0]))            return 0;
     if (v >= OCV_VOLT[OCV_POINTS - 1]) return 100;
     for (int i = 1; i < OCV_POINTS; i++) {
         if (v <= OCV_VOLT[i]) {
