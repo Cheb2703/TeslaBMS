@@ -105,7 +105,7 @@ You need [PlatformIO](https://platformio.org/). It works from VS Code, CLion (Pl
    pio device monitor
    ```
 
-`platformio.ini` is set up for the N16R8 board (16MB flash, octal PSRAM). If your board is different, change the board and memory settings there. The display draws into PSRAM buffers, so the PSRAM settings in that file matter: without them the Arduino core does not detect the PSRAM.
+The platform and every library are pinned in `platformio.ini` to the exact versions this firmware was tested with, so your build matches mine. A GitHub Actions job also builds the firmware on Linux for every change. `platformio.ini` is set up for the N16R8 board (16MB flash, octal PSRAM). If your board is different, change the board and memory settings there. The display draws into PSRAM buffers, so the PSRAM settings in that file matter: without them the Arduino core does not detect the PSRAM.
 
 ## Using it
 
