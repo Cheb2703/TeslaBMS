@@ -203,6 +203,12 @@ bool chargerReady = false;       // true once charger.begin() succeeds at boot -
 // its own (e.g. it auto-restarts its output after an AC power cycle while we
 // wanted it OFF) -- enforceChargerDesiredState() below corrects that.
 bool     desiredChargerOn = false;
+
+// True if the charger was supposed to be running when a fault hit. When the
+// fault clears, charging is resumed only if this is set, so a charger you had
+// switched off stays off. An explicit ON/OFF command from the web UI or the
+// console clears it (your latest instruction wins).
+bool     resumeChargerAfterFault = false;
 uint32_t lastChargerCorrectionMs = 0;
 #define CHARGER_CORRECTION_COOLDOWN_MS 3000  // don't hammer the bus every poll while mismatched
 
@@ -915,6 +921,11 @@ void loop()
         // gating the Remote ON/OFF pins with the kill switch) -- it only
         // helps while the ESP32 itself is alive and running.
         if (chargerReady && dd.isFaulted) {
+            // First tick of a fault: remember whether the charger was meant to
+            // be running, so it can go back to that state once the fault clears.
+            // (Only ever set here, never cleared, so later ticks -- where
+            // desiredChargerOn is already false -- can't wipe it.)
+            if (desiredChargerOn) resumeChargerAfterFault = true;
             desiredChargerOn = false; // for the ENTIRE duration of the fault, not just the edge
             if (charger.data().outputOn) {
                 if (charger.setOutput(false))
@@ -956,14 +967,20 @@ void loop()
             // this ON command together ARE the remote-toggle event curve
             // registers need to latch in, so this is the right moment to
             // make sure they're current.
-            if (chargerReady) {
+            // Only if it was running before the fault. Before, every cleared
+            // fault (even the 5-second 't' test fault) switched the charger ON
+            // whether or not it had been on.
+            if (chargerReady && resumeChargerAfterFault) {
+                resumeChargerAfterFault = false;
                 desiredChargerOn = true;
                 charger.setCurveCC(chargerCurveCC);
                 charger.setCurveCV(chargerCurveCV);
                 if (charger.setOutput(true))
-                    Logger::info("Fault cleared -- charger output commanded back ON");
+                    Logger::info("Fault cleared -- charger was on before the fault, output commanded back ON");
                 else
                     Logger::error("Fault cleared -- charger output ON command FAILED -- charger not responding");
+            } else if (chargerReady) {
+                Logger::info("Fault cleared -- charger was off before the fault, leaving it off");
             }
         }
 

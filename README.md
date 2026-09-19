@@ -154,7 +154,7 @@ The charger is controlled from the Charging tab (or the serial console):
 - **Full-charge override** charges to a higher target (default 24.9V) once, and returns to the daily target when the charger reports it is full.
 - Curve settings, timeouts and the charger output switch are all on the same tab.
 
-Whenever a BMS fault is active, the charger output is forced off, and it turns back on by itself once the fault has cleared.
+Whenever a BMS fault is active, the charger output is forced off, and it is not possible to switch it on. When the fault clears, the charger returns to the state it was in before: if it was running it turns back on by itself, and if it was off it stays off. After a reboot or power cut the charger always starts off.
 
 ### Default limits
 

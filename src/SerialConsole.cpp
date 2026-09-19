@@ -51,6 +51,7 @@ extern float    chargerRstVbat;
 extern uint16_t chargerCCTimeoutMin;
 extern uint16_t chargerCVTimeoutMin;
 extern uint16_t chargerFVTimeoutMin;
+extern bool     resumeChargerAfterFault; // see main.cpp -- an explicit ON/OFF here cancels a pending resume
 extern bool     desiredChargerOn;   // what we WANT the charger's output to be -- see main.cpp
 extern bool     currentFaultState;  // true while a BMS fault is active -- see main.cpp
 extern bool     chargerReady;       // true once charger.begin() succeeded at boot -- see main.cpp
@@ -677,6 +678,14 @@ void SerialConsole::handleShortCmd() {
         break;
     case 'o': case 'O': {
         bool newState = !charger.data().outputOn;
+        // Same rule the web UI already had: don't turn the charger ON while a
+        // BMS fault is active. (The 1-second interlock would switch it off
+        // again anyway, but only after it had run for up to a second.)
+        if (newState && currentFaultState) {
+            Logger::console("Refused: an active BMS fault is holding the charger output OFF");
+            break;
+        }
+        resumeChargerAfterFault = false; // your explicit command replaces any "resume after fault"
         desiredChargerOn = newState; // this is what we want going forward -- the
                                       // background mismatch-correction in main.cpp
                                       // loop() will keep enforcing this even if the

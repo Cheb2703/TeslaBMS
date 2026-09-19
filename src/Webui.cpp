@@ -56,6 +56,7 @@ extern uint16_t chargerCCTimeoutMin;
 extern uint16_t chargerCVTimeoutMin;
 extern uint16_t chargerFVTimeoutMin;
 extern bool     chargerReady;
+extern bool     resumeChargerAfterFault; // see main.cpp -- an explicit ON/OFF here cancels a pending resume
 extern bool     desiredChargerOn;   // what we WANT the charger's output to be -- see main.cpp; must be kept in sync here or enforceChargerDesiredState() will fight the WebUI's own command
 extern bool     chargerCurveReapplyPending; // set here, applied in main.cpp's loop() -- see comment there for why this can't be done directly in this handler
 extern float    chargerDailyTargetV;
@@ -494,6 +495,7 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
             sendJsonError(request, "refused: an active BMS fault is holding the output OFF", 409);
             return;
         }
+        resumeChargerAfterFault = false; // your explicit command replaces any "resume after fault"
         desiredChargerOn = wantOn; // keep intent in sync BEFORE commanding, so the
                                    // next poll cycle's mismatch check doesn't see this
                                    // as a rogue state change and "correct" it right back
