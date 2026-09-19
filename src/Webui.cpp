@@ -227,9 +227,12 @@ String WebUIManager::buildSettingsJson() {
 // ── Route handlers ───────────────────────────────────────────────────────────
 void WebUIManager::onIndex(AsyncWebServerRequest* request) {
     if (!checkAuth(request)) return;
-    // _P variant: reads straight out of flash (PROGMEM) instead of copying
-    // the whole ~15KB page into a heap String on every single request.
-    AsyncWebServerResponse* response = request->beginResponse_P(200, "text/html", WEBUI_INDEX_HTML);
+    // Pointer + length form: reads straight out of flash (PROGMEM) instead of
+    // copying the whole ~15KB page into a heap String on every single request.
+    // (The plain const char* overload does copy it; beginResponse_P, which used
+    // to be used here, is deprecated and does exactly what this does.)
+    AsyncWebServerResponse* response = request->beginResponse(200, "text/html",
+                                           (const uint8_t*)WEBUI_INDEX_HTML, strlen_P(WEBUI_INDEX_HTML));
     response->addHeader("Cache-Control", "no-store");
     request->send(response);
 }

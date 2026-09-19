@@ -611,9 +611,12 @@ void BMSModule::balanceCell(int cellNumber)
         }
     }
 
-    // Calculate the balance time in the register based on the constant balanceMinutes
-    uint8_t balanceTime = balanceMinutes * 60 / 2;  // Assuming the register increments in 2-second steps
-    if (balanceTime > 0xFF) balanceTime = 0xFF; // Limit to 255 (max value for 1 byte)
+    // CB_TIME register (0x33): bit 7 = units (0 = seconds, 1 = minutes), bits 5..0
+    // = duration (0-63). So 30 minutes is 0x80 | 30 = 0x9E. (This used to work out
+    // minutes x 60 / 2 = 900 and store it in one byte, which wrapped to 0x84 = 4
+    // minutes while the message above claimed 30.)
+    int minutesClamped = balanceMinutes > 63 ? 63 : balanceMinutes;
+    uint8_t balanceTime = 0x80 | (uint8_t)minutesClamped;
 
     // Send the data to reset balancing time first
     payload[0] = moduleAddress << 1;
