@@ -17,6 +17,23 @@
 // are found, a fault is raised and the charger is held off.
 #define DEFAULT_PACKS_CONFIGURED  2
 
+// Number of cells in series in the pack (a Tesla module is 6S; two modules in
+// PARALLEL are still 6S). The charger's voltage settings are capped at
+// CELLS_IN_SERIES x the cell over-voltage limit, so a bad setting or a typo
+// can never ask a 6S pack for the charger's full 42 V.
+#define CELLS_IN_SERIES           6
+
+// Highest value the cell over-voltage limit (VOLTLIMHI) may be set to. Tesla
+// NMC cells are 4.20 V max; the console used to accept up to 6.0 V, which
+// would silently switch over-voltage protection off.
+#define CELL_VOLT_ABS_MAX         4.25f
+
+// If loop() stops running for this long (a hang, an endless loop), the ESP32
+// reboots itself. The charger output is switched off during boot. Must be
+// longer than the slowest legitimate blocking call (a charger curve re-apply
+// can take about 8 s, and a poll with several unresponsive modules a few more).
+#define LOOP_WDT_TIMEOUT_S        30
+
 // A module that fails this many 3-second read cycles in a row (about 10 s)
 // raises a communication fault, so the charger is not left running on stale
 // readings if a BMB cable comes loose or a board stops answering.

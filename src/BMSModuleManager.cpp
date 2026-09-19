@@ -115,7 +115,12 @@ void BMSModuleManager::setupBoards()
     payload[1] = 0;
     payload[2] = 1;
 
-    while (1 == 1)
+    // Bounded: one pass per possible address, plus a few spare. With no cap, a
+    // board that answers at address 0 but never accepts its new address made
+    // this loop run forever and stall everything else, including the charger
+    // interlock.
+    int guard = 0;
+    while (guard++ < 70)
     {
         payload[0] = 0;
         payload[1] = 0;
@@ -157,6 +162,7 @@ void BMSModuleManager::setupBoards()
         }
         else break;
     }
+    if (guard > 70) Logger::error("setupBoards: gave up after 70 passes -- a board keeps answering at address 0");
 }
 
 void BMSModuleManager::findBoards()

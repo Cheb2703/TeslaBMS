@@ -51,6 +51,7 @@ extern float    chargerRstVbat;
 extern uint16_t chargerCCTimeoutMin;
 extern uint16_t chargerCVTimeoutMin;
 extern uint16_t chargerFVTimeoutMin;
+extern uint32_t bmbSimCommLossUntilMs;   // 'x' command: see main.cpp
 extern bool     resumeChargerAfterFault; // see main.cpp -- an explicit ON/OFF here cancels a pending resume
 extern bool     desiredChargerOn;   // what we WANT the charger's output to be -- see main.cpp
 extern bool     currentFaultState;  // true while a BMS fault is active -- see main.cpp
@@ -150,6 +151,7 @@ void SerialConsole::printMenu() {
     Logger::console("   b = Manual stop balancing");
     Logger::console("   1 to 6 = Toggle balancing on cell 1 to 6");
     Logger::console("   t = Inject a 5-second test fault (verify buzzer/display/history)");
+    Logger::console("   x = Simulate losing contact with all BMB modules for 40 s (tests the NO COMMS fault)");
     Logger::console("   o = Toggle charger output ON/OFF");
     Logger::console("   y = Print charger status now");
     Logger::console("   u = Toggle full-charge override");
@@ -168,6 +170,7 @@ void SerialConsole::printMenu() {
     Logger::console("   BALHYST=%f - How far voltage must dip before balancing is turned off", settings.balanceHyst);
 
     Logger::console("\nCHARGER CONTROLS (MEAN WELL NPB-750-24, CANBus)\n");
+    Logger::console("   NOTE: charger voltage settings are capped at %f V (%d cells x VOLTLIMHI), whatever range is shown below.", chargerVoltMax(), CELLS_IN_SERIES);
     Logger::console("   o = Toggle charger output ON/OFF");
     Logger::console("   y = Print charger status now (measured values, faults)");
     Logger::console("   u = Toggle full-charge override (daily-limit charging otherwise)");
@@ -349,7 +352,7 @@ void SerialConsole::handleConfigCmd() {
         }
         else Logger::console("Invalid battery ID. Please enter a value between 1 and 14");
     } else if (cmdString == String("VOLTLIMHI")) {
-        if (newFloat >= 0.0f && newFloat <= 6.00f) {
+        if (newFloat >= 2.5f && newFloat <= CELL_VOLT_ABS_MAX) {
             float oldVal = settings.OverVSetpoint;
             settings.OverVSetpoint = newFloat;
             preferences.begin("settings", false);
@@ -357,9 +360,9 @@ void SerialConsole::handleConfigCmd() {
             preferences.end();
             Logger::console("VOLTLIMHI: was %f, now %f", oldVal, settings.OverVSetpoint);
         }
-        else Logger::console("Invalid upper cell voltage limit. Please enter a value 0.0 to 6.0");
+        else Logger::console("Invalid upper cell voltage limit. Please enter a value 2.5 to 4.25");
     } else if (cmdString == String("VOLTLIMLO")) {
-        if (newFloat >= 0.0f && newFloat <= 6.0f) {
+        if (newFloat >= 1.5f && newFloat <= 4.0f) {
             float oldVal = settings.UnderVSetpoint;
             settings.UnderVSetpoint = newFloat;
             preferences.begin("settings", false);
@@ -367,7 +370,7 @@ void SerialConsole::handleConfigCmd() {
             preferences.end();
             Logger::console("VOLTLIMLO: was %f, now %f", oldVal, settings.UnderVSetpoint);
         }
-        else Logger::console("Invalid lower cell voltage limit. Please enter a value 0.0 to 6.0");
+        else Logger::console("Invalid lower cell voltage limit. Please enter a value 1.5 to 4.0");
     } else if (cmdString == String("BALVOLT")) {
         if (newFloat >= 0.0f && newFloat <= 6.0f) {
             float oldVal = settings.balanceVoltage;
@@ -428,7 +431,7 @@ void SerialConsole::handleConfigCmd() {
     // takes effect the next time output is turned on.
     } else if (cmdString == String("CHGV")) {
         float oldVal = chargerVoltage;
-        chargerVoltage = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > NPB24_VOLT_MAX ? NPB24_VOLT_MAX : newFloat);
+        chargerVoltage = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > chargerVoltMax() ? chargerVoltMax() : newFloat);
         chargerCurveCV = chargerVoltage; // same physical quantity -- CURVE_CV is what actually governs it
         preferences.begin("settings", false);
         preferences.putFloat("chgVoltage", chargerVoltage);
@@ -464,7 +467,7 @@ void SerialConsole::handleConfigCmd() {
             Logger::console("CHGCC: saved %f but write to charger failed -- charger not responding", chargerCurveCC);
     } else if (cmdString == String("CHGDAILYV")) {
         float oldVal = chargerDailyTargetV;
-        chargerDailyTargetV = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > NPB24_VOLT_MAX ? NPB24_VOLT_MAX : newFloat);
+        chargerDailyTargetV = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > chargerVoltMax() ? chargerVoltMax() : newFloat);
         preferences.begin("settings", false);
         preferences.putFloat("chgDailyV", chargerDailyTargetV);
         preferences.end();
@@ -476,7 +479,7 @@ void SerialConsole::handleConfigCmd() {
         }
     } else if (cmdString == String("CHGFULLV")) {
         float oldVal = chargerFullTargetV;
-        chargerFullTargetV = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > NPB24_VOLT_MAX ? NPB24_VOLT_MAX : newFloat);
+        chargerFullTargetV = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > chargerVoltMax() ? chargerVoltMax() : newFloat);
         preferences.begin("settings", false);
         preferences.putFloat("chgFullV", chargerFullTargetV);
         preferences.end();
@@ -492,7 +495,7 @@ void SerialConsole::handleConfigCmd() {
         // full-charge auto-completion). Use CHGDAILYV/CHGFULLV to change the
         // actual targets that system uses.
         float oldVal = chargerCurveCV;
-        chargerCurveCV = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > NPB24_VOLT_MAX ? NPB24_VOLT_MAX : newFloat);
+        chargerCurveCV = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > chargerVoltMax() ? chargerVoltMax() : newFloat);
         chargerVoltage = chargerCurveCV; // keep the CHGV/"live voltage" view in sync
         preferences.begin("settings", false);
         preferences.putFloat("chgCurveCV", chargerCurveCV);
@@ -505,7 +508,7 @@ void SerialConsole::handleConfigCmd() {
     } else if (cmdString == String("CHGFV")) {
         // Same caveat as CHGCV above -- gets overwritten by applyChargeTargetVoltage().
         float oldVal = chargerCurveFV;
-        chargerCurveFV = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > NPB24_VOLT_MAX ? NPB24_VOLT_MAX : newFloat);
+        chargerCurveFV = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > chargerVoltMax() ? chargerVoltMax() : newFloat);
         preferences.begin("settings", false);
         preferences.putFloat("chgCurveFV", chargerCurveFV);
         preferences.end();
@@ -525,7 +528,7 @@ void SerialConsole::handleConfigCmd() {
             Logger::console("CHGTC: saved %f but write to charger failed -- charger not responding", chargerCurveTC);
     } else if (cmdString == String("CHGRSTV")) {
         float oldVal = chargerRstVbat;
-        chargerRstVbat = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > NPB24_VOLT_MAX ? NPB24_VOLT_MAX : newFloat);
+        chargerRstVbat = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > chargerVoltMax() ? chargerVoltMax() : newFloat);
         preferences.begin("settings", false);
         preferences.putFloat("chgRstVbat", chargerRstVbat);
         preferences.end();
@@ -675,6 +678,10 @@ void SerialConsole::handleShortCmd() {
         testFaultOverride = true;
         testFaultUntilMillis = millis() + 5000;
         Logger::console("Injecting a 5-second test fault -- buzzer should chirp, display should show FAULT, and fault history should update once it clears.");
+        break;
+    case 'x': case 'X':
+        bmbSimCommLossUntilMs = millis() + 40000;
+        Logger::console("Simulating loss of contact with all modules for 40 s. Expect NO COMMS faults after roughly 10-15 s (charger held off), and they should clear by themselves once the 40 s are up.");
         break;
     case 'o': case 'O': {
         bool newState = !charger.data().outputOn;

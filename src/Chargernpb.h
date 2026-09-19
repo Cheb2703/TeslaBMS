@@ -54,6 +54,12 @@
 //   Default Vboost / Vfloat          : 28.8 V / 27.6 V
 #define NPB24_VOLT_MIN      21.0f
 #define NPB24_VOLT_MAX      42.0f
+
+// The highest charge voltage this pack may be asked for: the lower of the
+// charger's own limit (NPB24_VOLT_MAX) and CELLS_IN_SERIES x the cell
+// over-voltage limit. Defined in main.cpp. Every voltage setpoint is clamped
+// to this, both where it is entered (web UI / console) and in the driver.
+float chargerVoltMax();
 #define NPB24_CURR_MIN       0.0f
 #define NPB24_CURR_MAX      22.5f
 

@@ -4,6 +4,7 @@
 #include "Logger.h"
 
 extern EEPROMSettings settings;
+extern uint32_t bmbSimCommLossUntilMs;   // console 'x' test: pretend modules stopped answering (main.cpp)
 
 BMSModule::BMSModule()
 {
@@ -116,6 +117,12 @@ bool BMSModule::readModuleValues()
     float tempTemp;
 
     payload[0] = moduleAddress << 1;
+
+    // Simulated communication loss (console 'x'): fail without touching the bus.
+    if ((int32_t)(bmbSimCommLossUntilMs - millis()) > 0) {
+        badPackets++;
+        return false;
+    }
 
     if (!readStatus()) Logger::warn("Module %i: status read failed, keeping previous fault flags", moduleAddress);
     Logger::debug("Module %i   alerts=%X   faults=%X   COV=%X   CUV=%X", moduleAddress, alerts, faults, COVFaults, CUVFaults);

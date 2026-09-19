@@ -127,7 +127,17 @@ public:
     // near-real-time tail of Logger/menu output in the browser.
     void pumpLog();
 
+    // Call every loop() iteration. Runs any console commands that arrived from
+    // the web UI (Console tab, "clear faults" button). They are queued by the
+    // web server's task and executed HERE, in loop(), because many commands
+    // block for seconds (charger confirm/re-apply) or talk on the BMB serial
+    // line, which the web server's task must not do -- blocking it trips its
+    // watchdog, and it would collide with loop()'s own BMB traffic.
+    void processQueuedCommands();
+
 private:
+    QueueHandle_t _cmdQueue = nullptr;   // char* lines, filled by the web task, drained by loop()
+    void queueConsoleCommand(const String& line);
     AsyncWebServer* _server = nullptr;
     AsyncWebSocket* _ws     = nullptr;
     AsyncWebSocket  _wsLog{"/wslog"};

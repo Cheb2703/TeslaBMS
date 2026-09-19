@@ -284,7 +284,7 @@ void WebUIManager::onApiSettingsPost(AsyncWebServerRequest* request, const Strin
         preferences.putFloat("balanceHyst", balanceHyst);
     }
     if (doc["voltLimHi"].is<float>()) {
-        settings.OverVSetpoint = clampf(doc["voltLimHi"].as<float>(), 2.5f, 4.3f);
+        settings.OverVSetpoint = clampf(doc["voltLimHi"].as<float>(), 2.5f, CELL_VOLT_ABS_MAX);
         preferences.putFloat("overVSetpoint", settings.OverVSetpoint);
     }
     if (doc["voltLimLo"].is<float>()) {
@@ -393,7 +393,7 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
     bool curveChanged = false;
 
     if (doc["voltage"].is<float>()) {
-        chargerVoltage = clampf(doc["voltage"].as<float>(), NPB24_VOLT_MIN, NPB24_VOLT_MAX);
+        chargerVoltage = clampf(doc["voltage"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
         chargerCurveCV = chargerVoltage;
         preferences.putFloat("chgVoltage", chargerVoltage);
         preferences.putFloat("chgCurveCV", chargerCurveCV);
@@ -417,7 +417,7 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
         curveChanged = true;
     }
     if (doc["curveCV"].is<float>()) {
-        chargerCurveCV = clampf(doc["curveCV"].as<float>(), NPB24_VOLT_MIN, NPB24_VOLT_MAX);
+        chargerCurveCV = clampf(doc["curveCV"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
         chargerVoltage = chargerCurveCV;
         preferences.putFloat("chgCurveCV", chargerCurveCV);
         preferences.putFloat("chgVoltage", chargerVoltage);
@@ -425,7 +425,7 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
         curveChanged = true;
     }
     if (doc["curveFV"].is<float>()) {
-        chargerCurveFV = clampf(doc["curveFV"].as<float>(), NPB24_VOLT_MIN, NPB24_VOLT_MAX);
+        chargerCurveFV = clampf(doc["curveFV"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
         preferences.putFloat("chgCurveFV", chargerCurveFV);
         charger.setCurveFV(chargerCurveFV);
         curveChanged = true;
@@ -441,13 +441,13 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
     // idea as voltage/curveCV above but through the daily/full lens instead
     // of a raw manual value.
     if (doc["dailyTargetV"].is<float>()) {
-        chargerDailyTargetV = clampf(doc["dailyTargetV"].as<float>(), NPB24_VOLT_MIN, NPB24_VOLT_MAX);
+        chargerDailyTargetV = clampf(doc["dailyTargetV"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
         preferences.putFloat("chgDailyV", chargerDailyTargetV);
         applyChargeTargetVoltage();
         if (!chargerFullChargeOverride) curveChanged = true; // only matters live if it's the active target right now
     }
     if (doc["fullTargetV"].is<float>()) {
-        chargerFullTargetV = clampf(doc["fullTargetV"].as<float>(), NPB24_VOLT_MIN, NPB24_VOLT_MAX);
+        chargerFullTargetV = clampf(doc["fullTargetV"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
         preferences.putFloat("chgFullV", chargerFullTargetV);
         applyChargeTargetVoltage();
         if (chargerFullChargeOverride) curveChanged = true;
@@ -460,7 +460,7 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
     }
 
     if (doc["restartVbat"].is<float>()) {
-        chargerRstVbat = clampf(doc["restartVbat"].as<float>(), NPB24_VOLT_MIN, NPB24_VOLT_MAX);
+        chargerRstVbat = clampf(doc["restartVbat"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
         preferences.putFloat("chgRstVbat", chargerRstVbat);
         charger.setChgRstVbat(chargerRstVbat);
         curveChanged = true;
@@ -532,7 +532,7 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
 
 void WebUIManager::onApiFaultsClear(AsyncWebServerRequest* request) {
     if (!checkAuth(request)) return;
-    bms.clearFaults();
+    queueConsoleCommand("C");   // the console's "clear all faults"; run by loop(), not this task
     sendJsonOk(request);
 }
 
@@ -576,9 +576,32 @@ void WebUIManager::onLogWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* cl
             for (size_t i = 0; i < len; i++) line += (char)data[i];
             line.trim();
             if (line.length() > 0) {
-                console.injectLine(line);
+                queueConsoleCommand(line);   // executed by loop() -- see processQueuedCommands()
             }
         }
+    }
+}
+
+// Called on the web server's task. Copies the line and hands it to loop() via
+// a FreeRTOS queue (safe to use across tasks); never runs the command itself.
+void WebUIManager::queueConsoleCommand(const String& line) {
+    if (!_cmdQueue) return;
+    char* copy = strdup(line.c_str());
+    if (!copy) return;
+    if (xQueueSend(_cmdQueue, &copy, 0) != pdTRUE) {
+        free(copy);
+        Logger::warn("Web UI: command queue full, dropped '%s'", line.c_str());
+    }
+}
+
+// Called from loop(): run everything the web UI queued, exactly as if it had
+// been typed on the USB serial console.
+void WebUIManager::processQueuedCommands() {
+    if (!_cmdQueue) return;
+    char* line = nullptr;
+    while (xQueueReceive(_cmdQueue, &line, 0) == pdTRUE) {
+        console.injectLine(String(line));
+        free(line);
     }
 }
 
@@ -586,6 +609,7 @@ void WebUIManager::onLogWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* cl
 void WebUIManager::begin(AsyncWebServer* server, AsyncWebSocket* ws) {
     _server = server;
     _ws = ws;
+    _cmdQueue = xQueueCreate(8, sizeof(char*));
 
     _ws->onEvent([this](AsyncWebSocket* s, AsyncWebSocketClient* c, AwsEventType type,
                         void* arg, uint8_t* data, size_t len) {

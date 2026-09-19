@@ -25,6 +25,7 @@
 #include <Preferences.h>
 #include <ArduinoOTA.h>
 #include <Update.h>
+#include <esp_task_wdt.h>
 #include "secrets.h"
 //#include <LittleFS.h> // Will be used later to host the Web frontend to show stats
 #include <Adafruit_NeoPixel.h> // To drive ws2812 LED
@@ -242,6 +243,11 @@ int      lastClearedFaultCount = 0;
 bool     testFaultOverride = false;
 uint32_t testFaultUntilMillis = 0;
 
+// Set by the console 'x' command: until this time, every BMB module read fails
+// (nothing is sent on the bus). Lets you check the NO COMMS fault and the
+// charger interlock without unplugging anything.
+uint32_t bmbSimCommLossUntilMs = 0;
+
 // ------------------ MQTT ------------------
 String mqttServer;
 const int mqttPort = 1883;
@@ -326,8 +332,21 @@ void enforceChargerDesiredState() {
 // chargerCurveReapplyPending = true (deferred, WebUI-safe) or
 // charger.reapplyCurveNow() directly (only from loop()/console context,
 // never a request handler -- see the many other comments on this).
+float chargerVoltMax() {
+    float ceiling = CELLS_IN_SERIES * settings.OverVSetpoint;
+    if (ceiling > NPB24_VOLT_MAX) ceiling = NPB24_VOLT_MAX;
+    if (ceiling < NPB24_VOLT_MIN) ceiling = NPB24_VOLT_MIN;
+    return ceiling;
+}
+
 void applyChargeTargetVoltage() {
     chargerCurveCV = chargerFullChargeOverride ? chargerFullTargetV : chargerDailyTargetV;
+    // Saved values (or an over-voltage limit lowered since) can sit above the
+    // pack ceiling; never send those to the charger.
+    if (chargerCurveCV > chargerVoltMax()) {
+        Logger::warn("Charge target %f V is above the pack limit, using %f V", chargerCurveCV, chargerVoltMax());
+        chargerCurveCV = chargerVoltMax();
+    }
     chargerVoltage = chargerCurveCV; // keep the CHGV/dashboard alias in sync
     chargerCurveFV = chargerCurveCV; // float, if entered, must never exceed the active target
     if (chargerReady) {
@@ -547,6 +566,7 @@ void setup()
     // Falls back to whatever loadSettings() already put in place if no saved
     // value exists yet.
     settings.OverVSetpoint  = preferences.getFloat("overVSetpoint",  settings.OverVSetpoint);
+    if (settings.OverVSetpoint > CELL_VOLT_ABS_MAX) settings.OverVSetpoint = CELL_VOLT_ABS_MAX; // a value saved by an older build/console
     settings.UnderVSetpoint = preferences.getFloat("underVSetpoint", settings.UnderVSetpoint);
     settings.OverTSetpoint  = preferences.getFloat("overTSetpoint",  settings.OverTSetpoint);
     settings.UnderTSetpoint = preferences.getFloat("underTSetpoint", settings.UnderTSetpoint);
@@ -775,6 +795,14 @@ void setup()
     } else {
         Serial.println("AP IP address: " + WiFi.softAPIP().toString());
     }
+
+    // Watchdog for loop(): if it stops running (a hang or an endless loop) the
+    // ESP32 reboots, and the charger output is switched off during boot. Turned
+    // on last, so the long start-up sequence above can't trip it. This also sets
+    // the timeout for the other watched tasks (like the web server's).
+    esp_task_wdt_init(LOOP_WDT_TIMEOUT_S, true);
+    enableLoopWDT();
+    Serial.printf("Loop watchdog enabled (%d s)\r\n", LOOP_WDT_TIMEOUT_S);
 }
 
 /*
@@ -844,6 +872,7 @@ void loop()
 
     dnsServer.processNextRequest(); // AP catch-all DNS -- cheap, must be polled every iteration
     console.loop(); // For interacting with the debug menu over serial
+    webUI.processQueuedCommands(); // Console-tab / fault-clear commands from the web UI run HERE, not on the web server's task
     webUI.pumpLog(); // Mirror new SERIALCONSOLE output to the web Console tab -- cheap no-op if nothing new / nobody's watching
 
     // 1-second tasks

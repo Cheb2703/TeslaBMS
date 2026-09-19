@@ -158,7 +158,7 @@ bool ChargerNPB::reapplyCurveNow(uint32_t timeoutMs) {
 }
 
 bool ChargerNPB::setVoltage(float volts) {
-    volts = clampf(volts, NPB24_VOLT_MIN, NPB24_VOLT_MAX);
+    volts = clampf(volts, NPB24_VOLT_MIN, chargerVoltMax());
     return writeValue(NPB_VOUT_SET, (uint16_t)(volts * 100.0f + 0.5f));
 }
 
@@ -168,12 +168,12 @@ bool ChargerNPB::setCurrent(float amps) {
 }
 
 bool ChargerNPB::setCurveCV(float volts) {
-    volts = clampf(volts, NPB24_VOLT_MIN, NPB24_VOLT_MAX);
+    volts = clampf(volts, NPB24_VOLT_MIN, chargerVoltMax());
     return writeValue(NPB_CURVE_CV, (uint16_t)(volts * 100.0f + 0.5f));
 }
 
 bool ChargerNPB::setCurveFV(float volts) {
-    volts = clampf(volts, NPB24_VOLT_MIN, NPB24_VOLT_MAX);
+    volts = clampf(volts, NPB24_VOLT_MIN, chargerVoltMax());
     return writeValue(NPB_CURVE_FV, (uint16_t)(volts * 100.0f + 0.5f));
 }
 
@@ -188,7 +188,7 @@ bool ChargerNPB::setCurveTC(float amps) {
 }
 
 bool ChargerNPB::setChgRstVbat(float volts) {
-    volts = clampf(volts, NPB24_VOLT_MIN, NPB24_VOLT_MAX);
+    volts = clampf(volts, NPB24_VOLT_MIN, chargerVoltMax());
     return writeValue(NPB_CHG_RST_VBAT, (uint16_t)(volts * 100.0f + 0.5f));
 }
 

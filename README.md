@@ -167,7 +167,9 @@ These are the first-boot defaults. Everything can be changed in the web UI Setti
 | Balance starts at | 3.95V (hysteresis 0.007V) |
 | Charger current | 22.5A (taper cutoff 2.25A) |
 
-The charger defaults are for a **6S** pack. For any other pack size, change the charger voltages and the cell limits to suit your pack. The driver refuses to command values outside the NPB-750-24's hardware range, but it cannot know what is safe for your battery.
+The charger defaults are for a **6S** pack. For any other pack size, change the charger voltages and the cell limits to suit your pack, and set `CELLS_IN_SERIES` in `src/config.h`.
+
+Two hard limits protect against typos: the cell over-voltage limit cannot be set above 4.25 V, and every charger voltage setting is capped at `CELLS_IN_SERIES` times that limit (25.2 V for the default 6S pack), even though the charger itself can go higher. The driver also refuses values outside the NPB-750-24's own range. None of this can know what is safe for your particular battery, so check the numbers.
 
 ### Serial console
 
@@ -179,6 +181,7 @@ Connect over USB at 115200 baud, or use the Console tab in the web UI. Type `h` 
 | `y` | Print charger status |
 | `u` | Toggle full-charge override |
 | `t` | Inject a 5-second test fault (checks the buzzer, display and web UI) |
+| `x` | Pretend all modules stopped answering for 40 seconds (checks the `NO COMMS` fault and the charger cut-off) |
 | `B` | Run a balancing pass now (`b` does the same) |
 | `F`, `R`, `C` | Find boards, renumber boards, clear board faults |
 | `VOLTLIMHI=4.2` | Set a cell voltage limit (there are matching commands for the other limits) |
@@ -187,6 +190,7 @@ Connect over USB at 115200 baud, or use the Console tab in the web UI. Type `h` 
 ## Safety
 
 - Lithium-ion packs can catch fire or explode if mis-wired, over-charged, over-discharged or short-circuited. Only build this if you understand the risks.
+- If the main loop stops running for 30 seconds (a software hang), the ESP32 reboots itself, and the charger output is switched off during boot. That is a last resort, not a substitute for the next point.
 - **The software fault interlock only works while the ESP32 is running.** It is one layer of protection, not the only one. Use hardware protection as well, such as a fuse, a contactor or hardware cutoff, and consider gating the charger's remote on/off pins with a hardware safety circuit.
 - The state of charge shown is an estimate, not a measurement.
 - Check every charger and cell limit against your own pack before charging. The defaults are for one specific 6S setup.
