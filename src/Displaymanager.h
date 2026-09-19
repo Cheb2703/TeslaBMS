@@ -134,14 +134,12 @@ public:
 
 #define STATUS_Y    288
 
-// How long each page (dashboard vs fault list) stays up before switching,
-// while at least one fault is active. Lets you still see live pack data
-// without the fault page hogging the screen indefinitely.
-#define FAULT_PAGE_INTERVAL_MS 8000
-
-// Same idea, but for the charging page -- alternates with the dashboard
-// while the charger is actively on, instead of parking there forever.
-#define CHARGE_PAGE_INTERVAL_MS 8000
+// How long each page stays up before the display moves to the next one. The
+// dashboard is always in the rotation; the fault page joins it while any fault
+// is active, and the charging page while the charger is on. With more than one
+// page in the rotation they take turns (dashboard -> faults -> charging ->
+// dashboard ...), so nothing hogs the screen and live pack data stays visible.
+#define PAGE_ROTATE_INTERVAL_MS 8000
 
 // Periodic proactive panel reinit ("display watchdog"). This board has no
 // MISO/readback wired to the LCD (write-only SPI bus), so there's no way to
@@ -239,11 +237,12 @@ private:
     LGFX    _lcd;
     bool    _ready;
 
-    // Which page is currently on screen, and when we switched to it.
-    // PAGE_FAULT always wins over PAGE_CHARGING -- a fault is more urgent
-    // than routine charging status. Also used to detect transitions back to
-    // PAGE_DASHBOARD so we know when to clear stale full-screen content out
-    // of the gaps the dashboard's partial-redraw sprites don't cover.
+    // Which page is currently on screen, and when we switched to it. A new
+    // fault (or the start of charging) is shown immediately; after that the
+    // pages in the rotation take turns every PAGE_ROTATE_INTERVAL_MS. Also used
+    // to detect transitions back to PAGE_DASHBOARD so we know when to clear
+    // stale full-screen content out of the gaps the dashboard's partial-redraw
+    // sprites don't cover.
     enum DisplayPage { PAGE_DASHBOARD, PAGE_FAULT, PAGE_CHARGING };
     DisplayPage _currentPage;
     uint32_t    _pageEnteredMillis;

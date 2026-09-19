@@ -185,57 +185,44 @@ void DisplayManager::update(const DisplayData& d) {
         drawStatusBar(d);
     };
 
-    if (!d.isFaulted && !isCharging) {
-        // Nothing active -- always show the dashboard.
-        if (_currentPage != PAGE_DASHBOARD) {
-            resetToDashboardBackground();
-            _currentPage = PAGE_DASHBOARD;
+    bool isFaulted = d.isFaulted;
+
+    // The pages in the rotation right now: the dashboard always, the fault page
+    // while any fault is active, the charging page while the charger is on.
+    // (Both can apply at once -- e.g. charging a pack that has a low-voltage
+    // alarm -- and then all three take turns.)
+    auto inRotation = [&](DisplayPage p) {
+        return p == PAGE_DASHBOARD
+            || (p == PAGE_FAULT    && isFaulted)
+            || (p == PAGE_CHARGING && isCharging);
+    };
+
+    DisplayPage next = _currentPage;
+    if (isFaulted && !_wasFaulted) {
+        next = PAGE_FAULT;          // a new fault: show it right away
+    } else if (isCharging && !_wasCharging) {
+        next = PAGE_CHARGING;       // charging just started: show it right away
+    } else if (!inRotation(_currentPage)) {
+        next = PAGE_DASHBOARD;      // the reason for the page we were on has gone
+    } else if (now - _pageEnteredMillis >= PAGE_ROTATE_INTERVAL_MS) {
+        // Time to move on: the next page, in fixed order, that is in the rotation.
+        static const DisplayPage order[3] = { PAGE_DASHBOARD, PAGE_FAULT, PAGE_CHARGING };
+        int cur = 0;
+        while (cur < 3 && order[cur] != _currentPage) cur++;
+        for (int step = 1; step <= 3; step++) {
+            DisplayPage candidate = order[(cur + step) % 3];
+            if (inRotation(candidate)) { next = candidate; break; }
         }
-        _wasFaulted  = false;
-        _wasCharging = false;
-        drawDashboard();
-        return;
     }
+    _wasFaulted  = isFaulted;
+    _wasCharging = isCharging;
 
-    // Catch the fault->cleared edge BEFORE the branches below touch
-    // _wasFaulted, so a stale PAGE_FAULT can't linger on screen reporting a
-    // fault that's no longer active while we wait for the charging page's
-    // own "just started" edge to catch up.
-    bool faultJustCleared = _wasFaulted && !d.isFaulted;
-
-    if (d.isFaulted) {
-        // Fault always wins over the charging page -- more urgent to see.
-        if (!_wasFaulted) {
-            // Just started faulting -- show the fault page right away
-            // instead of waiting up to FAULT_PAGE_INTERVAL_MS.
-            _currentPage = PAGE_FAULT;
-            _pageEnteredMillis = now;
-            _wasFaulted = true;
-        } else if (now - _pageEnteredMillis >= FAULT_PAGE_INTERVAL_MS) {
-            // Already faulted for a while -- alternate between the fault
-            // page and the dashboard so live pack data is still visible.
-            _currentPage = (_currentPage == PAGE_FAULT) ? PAGE_DASHBOARD : PAGE_FAULT;
-            _pageEnteredMillis = now;
-            if (_currentPage == PAGE_DASHBOARD) resetToDashboardBackground();
-        }
-        // Don't let charging-page alternation run concurrently -- just
-        // track that it's active so the edge fires cleanly once we get here.
-        _wasCharging = isCharging;
-    } else {
-        // Not faulted. isCharging must be true to have reached this branch.
-        _wasFaulted = false;
-        if (!_wasCharging || faultJustCleared) {
-            // Either just started charging, or a fault just cleared and
-            // charging was (or still is) active -- show the charging page
-            // immediately rather than leaving the fault page up stale.
-            _currentPage = PAGE_CHARGING;
-            _pageEnteredMillis = now;
-            _wasCharging = true;
-        } else if (now - _pageEnteredMillis >= CHARGE_PAGE_INTERVAL_MS) {
-            _currentPage = (_currentPage == PAGE_CHARGING) ? PAGE_DASHBOARD : PAGE_CHARGING;
-            _pageEnteredMillis = now;
-            if (_currentPage == PAGE_DASHBOARD) resetToDashboardBackground();
-        }
+    if (next != _currentPage) {
+        _currentPage = next;
+        _pageEnteredMillis = now;
+        // The dashboard only repaints parts of the screen, so wipe whatever a
+        // full-screen page left behind.
+        if (next == PAGE_DASHBOARD) resetToDashboardBackground();
     }
 
     switch (_currentPage) {
