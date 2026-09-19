@@ -1,0 +1,39 @@
+name: Build firmware
+
+# Builds the firmware on every push and pull request, on Linux. Linux treats
+# file names as case-sensitive (Windows does not), so this catches #include
+# mistakes that only show up for other people's machines.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Reuse downloaded toolchains and libraries between runs.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install platformio==6.1.18
+
+      # secrets.h is git-ignored, so a fresh checkout does not have it. The
+      # template holds placeholder values, which is all a compile needs.
+      - name: Create secrets.h from the template
+        run: cp src/secrets_template.h src/secrets.h
+
+      - name: Build
+        run: pio run
