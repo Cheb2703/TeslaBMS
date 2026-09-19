@@ -26,7 +26,7 @@ Compared with the version it was forked from, this one adds CAN charger control,
   - the full charge curve (constant current, constant voltage, float, taper cutoff, restart voltage, stage timeouts),
   - a safety interlock that keeps the charger switched **off** for as long as any fault is active, and resumes charging automatically when the fault clears.
 - **Its own Wi-Fi access point and web UI. No home Wi-Fi or internet needed.** The whole page is stored on the device. Tabs: Dashboard, Charging, Faults, Settings, Firmware update, and a live serial Console.
-- **4" LCD** (480x320) showing cell voltages, temperatures, state of charge, faults and charging status. The LCD and the web dashboard show the first two modules; the BMS itself supervises every module it finds.
+- **4" LCD** (480x320) showing cell voltages, temperatures, state of charge, faults and charging status. The LCD and the web dashboard show the first two modules; the BMS itself supervises every module it finds. When there is more than one page to show (dashboard, faults, charging), the LCD cycles through all of them, 8 seconds each.
 - **Onboard LED and buzzer** for at-a-glance state.
 - **Wireless firmware updates** from the web UI.
 - **Optional home Wi-Fi** connection, in addition to the access point.
@@ -146,7 +146,7 @@ The LED is the RGB LED built into the ESP32-S3 dev board. The firmware drives it
 - **Blue flashes:** connected to your home Wi-Fi and reading the modules.
 - **Purple flashes:** fewer modules found than configured. It keeps searching.
 - **Green flashes:** all configured modules found.
-- **Buzzer, repeating double chirp:** at least one fault is active.
+- **Buzzer, repeating double chirp:** a fault that blocks charging is active, or a low-voltage alarm is active while the charger is off.
 
 ### Charging
 
@@ -158,7 +158,7 @@ The charger is controlled from the Charging tab (or the serial console):
 
 Each time the charger switches on, the firmware reads its charge settings (current, voltage, float, taper) back and writes to the log whether they match what was sent. By default a mismatch is only logged; set `CHARGER_VERIFY_TURNS_OFF` to `1` in `src/config.h` to also switch the charger off.
 
-Whenever a fault that makes charging unsafe is active (over-voltage, over-temperature, a lost module, a sensor failure and so on), the charger output is forced off, and it is not possible to switch it on. **Low cell voltage is different:** a cell below the low-voltage limit sounds the alarm but does not stop charging, so a low pack can always be recharged. Only a cell below 2.5 V (shown as `DEEP DISCHARGE`) blocks charging. When the fault clears, the charger returns to the state it was in before: if it was running it turns back on by itself, and if it was off it stays off. After a reboot or power cut the charger always starts off.
+Whenever a fault that makes charging unsafe is active (over-voltage, over-temperature, a lost module, a sensor failure and so on), the charger output is forced off, and it is not possible to switch it on. **Low cell voltage is different:** a cell below the low-voltage limit sounds the alarm but does not stop charging, so a low pack can always be recharged. Only a cell below 2.5 V (shown as `DEEP DISCHARGE`) blocks charging. The buzzer for a low-voltage alarm is silent while the charger is running, and sounds again if charging stops while the pack is still low. When the fault clears, the charger returns to the state it was in before: if it was running it turns back on by itself, and if it was off it stays off. After a reboot or power cut the charger always starts off.
 
 ### Default limits
 
@@ -185,6 +185,7 @@ Connect over USB at 115200 baud, or use the Console tab in the web UI. Type `h` 
 | `y` | Print charger status |
 | `u` | Toggle full-charge override |
 | `t` | Inject a 5-second test fault (checks the buzzer, display and web UI) |
+| `k` | Show each module's own over- and under-voltage trip points (read-only) |
 | `x` | Pretend all modules stopped answering for 40 seconds (checks the `NO COMMS` fault and the charger cut-off) |
 | `B` | Run a balancing pass now (`b` does the same) |
 | `F`, `R`, `C` | Find boards, renumber boards, clear board faults |
