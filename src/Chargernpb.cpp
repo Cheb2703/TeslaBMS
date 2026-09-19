@@ -416,7 +416,7 @@ void ChargerNPB::sniffBus(gpio_num_t txPin, gpio_num_t rxPin, uint32_t durationM
         return;
     }
 
-    Logger::info("Charger CAN sniff: listening for %lu ms (no frames will be transmitted)...",
+    Logger::info("Charger CAN sniff: listening for %l ms (no frames will be transmitted)...",
                  (unsigned long)durationMs);
 
     uint32_t deadline = millis() + durationMs;
@@ -440,7 +440,7 @@ void ChargerNPB::sniffBus(gpio_num_t txPin, gpio_num_t rxPin, uint32_t durationM
     }
 
     if (framesSeen == 0) {
-        Logger::warn("Charger CAN sniff: saw NOTHING in %lu ms. The charger is not "
+        Logger::warn("Charger CAN sniff: saw NOTHING in %l ms. The charger is not "
                      "transmitting anything unprompted -- it likely only replies to "
                      "requests, so this doesn't tell us the ID format directly.",
                      (unsigned long)durationMs);

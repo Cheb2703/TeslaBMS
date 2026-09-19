@@ -1021,7 +1021,7 @@ void loop()
             strncpy(lastClearedFaultReason, lastActiveFaultReason, sizeof(lastClearedFaultReason) - 1);
             lastClearedFaultReason[sizeof(lastClearedFaultReason) - 1] = '\0';
             lastClearedFaultCount = lastActiveFaultCount;
-            Logger::info("Fault cleared after %lu ms: %s", (unsigned long)lastFaultDurationMs, lastClearedFaultReason);
+            Logger::info("Fault cleared after %l ms: %s", (long)lastFaultDurationMs, lastClearedFaultReason);
         }
 
         // Resume the charger once every fault that was HOLDING IT OFF has cleared.
@@ -1154,7 +1154,7 @@ void loop()
                 preferences.putBool("chgFullOvr", false);
                 preferences.end();
                 applyChargeTargetVoltage();
-                Logger::info("Full charge complete -- reverting to daily charge target (%.2fV)", chargerDailyTargetV);
+                Logger::info("Full charge complete -- reverting to daily charge target (%fV)", chargerDailyTargetV);
                 if (chargerReady && desiredChargerOn && !chargeBlockedState) {
                     if (!charger.reapplyCurveNow())
                         Logger::error("Daily-target reapply after full charge failed to confirm -- charger not responding");

@@ -584,7 +584,7 @@ void SerialConsole::handleConfigCmd() {
             uint16_t rawCmd = (uint16_t)strtol((char*)(cmdBuffer + i), NULL, 0);
             uint16_t rawVal = (uint16_t)strtol(commaPos + 1, NULL, 0);
             if (charger.writeRaw(rawCmd, rawVal))
-                Logger::console("CHGRAWW: wrote 0x%X = 0x%X directly. Verify against the manual's bit tables for that register.", rawCmd, rawVal);
+                Logger::console("CHGRAWW: wrote %X = %X directly. Verify against the manual's bit tables for that register.", rawCmd, rawVal);
             else
                 Logger::console("CHGRAWW: write failed -- charger not responding");
         }
@@ -593,9 +593,9 @@ void SerialConsole::handleConfigCmd() {
         uint16_t rawCmd = (uint16_t)newValue;
         uint16_t rawVal;
         if (charger.readRaw(rawCmd, rawVal))
-            Logger::console("CHGRAWR: register 0x%X = 0x%X (%d decimal)", rawCmd, rawVal, rawVal);
+            Logger::console("CHGRAWR: register %X = %X (%d decimal)", rawCmd, rawVal, rawVal);
         else
-            Logger::console("CHGRAWR: no reply for register 0x%X", rawCmd);
+            Logger::console("CHGRAWR: no reply for register %X", rawCmd);
 
     } else if (cmdString == String("CHGOPINIT")) {
         // Sets ONLY the OPERATION_INIT bits (low byte, bits 1-2) of
@@ -714,7 +714,7 @@ void SerialConsole::handleShortCmd() {
         Logger::console("Charger status: %s", cd.online ? "ONLINE" : "OFFLINE (no reply)");
         if (cd.online) {
             Logger::console("  MEASURED: VOUT=%fV  IOUT=%fA  TEMP=%fC  outputOn=%d", cd.vout, cd.iout, cd.temp, cd.outputOn);
-            Logger::console("  FAULT_STATUS=0x%X (%s)  CHG_STATUS=0x%X (%s)", cd.faultRaw, ChargerNPB::faultToString(cd.faultRaw).c_str(), cd.chgStatus, ChargerNPB::chgStatusToString(cd.chgStatus).c_str());
+            Logger::console("  FAULT_STATUS=%X (%s)  CHG_STATUS=%X (%s)", cd.faultRaw, ChargerNPB::faultToString(cd.faultRaw).c_str(), cd.chgStatus, ChargerNPB::chgStatusToString(cd.chgStatus).c_str());
         }
         uint16_t sysCfg;
         if (charger.readRaw(NPB_SYSTEM_CONFIG, sysCfg)) {

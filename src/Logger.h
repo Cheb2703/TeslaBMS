@@ -30,6 +30,11 @@
 #include <Arduino.h>
 #include "config.h"
 
+// NOTE: the format strings below use this logger's OWN small printf, not the
+// standard one. Supported: %s %d %i %f (always 3 decimals) %x %X (the X form
+// adds a "0x" prefix itself, so don't write "0x%X") %b %B %l (a long) %c %t %T
+// and %%. Anything else -- %u, %lu, %.2f, %02d -- is printed literally and
+// leaves the arguments out of step. For those, use Serial.printf() instead.
 class Logger {
 public:
     enum LogLevel {
