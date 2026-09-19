@@ -20,13 +20,13 @@ Compared with the version it was forked from, this one adds CAN charger control,
 
 - **Reads every cell** (voltage) and both module temperatures from each Tesla BMB, and finds and numbers the boards automatically.
 - **Balances the cells.** Modules are handled in pairs, and each pair balances to the lowest cell in that pair.
-- **Protects the pack.** Adjustable cell voltage and temperature limits. Any fault shows on the LCD, in the web UI, and on a buzzer.
+- **Protects the pack.** Adjustable cell voltage and temperature limits, plus faults for a module that stops answering, fewer modules found than expected, and a failed temperature sensor. Any fault shows on the LCD, in the web UI, and on a buzzer.
 - **Controls a MEAN WELL NPB-750-24 charger** over CAN bus:
   - an everyday "daily" charge target (about 80% charge) and a one-tap full-charge override,
   - the full charge curve (constant current, constant voltage, float, taper cutoff, restart voltage, stage timeouts),
   - a safety interlock that keeps the charger switched **off** for as long as any fault is active, and resumes charging automatically when the fault clears.
 - **Its own Wi-Fi access point and web UI. No home Wi-Fi or internet needed.** The whole page is stored on the device. Tabs: Dashboard, Charging, Faults, Settings, Firmware update, and a live serial Console.
-- **4" LCD** (480x320) showing cell voltages, temperatures, state of charge, faults and charging status.
+- **4" LCD** (480x320) showing cell voltages, temperatures, state of charge, faults and charging status. The LCD and the web dashboard show the first two modules; the BMS itself supervises every module it finds.
 - **Onboard LED and buzzer** for at-a-glance state.
 - **Wireless firmware updates** from the web UI.
 - **Optional home Wi-Fi** connection, in addition to the access point.
@@ -125,6 +125,16 @@ Two switches in [`src/config.h`](src/config.h) control this. Set either to `1` t
 #define WEBUI_REQUIRE_AUTH   0   // 1 = the web UI asks for a username and password
 ```
 
+**The web login is not enough on its own.** The Console tab does not use it, so anyone who can reach the device can still send it commands. If you want protection, turn on `AP_REQUIRE_PASSWORD` as well: the Wi-Fi password is what actually keeps people out.
+
+### Number of modules
+
+Set **Packs configured** in the Settings tab to the number of Tesla modules you have (default 2). The BMS raises a fault, and keeps the charger off, in these cases:
+
+- fewer modules are found than you configured (`MODULES x/y FOUND`),
+- a module has not answered for about 10 seconds (`NO COMMS`),
+- a module's temperature sensor gives an impossible reading (`TEMP SENSOR`).
+
 ### What the LED and buzzer mean
 
 The LED is the RGB LED built into the ESP32-S3 dev board. The firmware drives it on GPIO 48 (`PIN` in `src/main.cpp`), which is where the original ESP32-S3-DevKitC-1 has it. Espressif's newer v1.1 revision uses GPIO 38 instead, so if your LED never lights, change `PIN` there.
@@ -169,7 +179,7 @@ Connect over USB at 115200 baud, or use the Console tab in the web UI. Type `h` 
 | `y` | Print charger status |
 | `u` | Toggle full-charge override |
 | `t` | Inject a 5-second test fault (checks the buzzer, display and web UI) |
-| `B` / `b` | Start / stop balancing |
+| `B` | Run a balancing pass now (`b` does the same) |
 | `F`, `R`, `C` | Find boards, renumber boards, clear board faults |
 | `VOLTLIMHI=4.2` | Set a cell voltage limit (there are matching commands for the other limits) |
 | `CHGDAILYV=24.0` | Set the daily charge target |
