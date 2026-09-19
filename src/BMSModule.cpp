@@ -378,6 +378,30 @@ float BMSModule::getTemperature(int temp)
     return temperatures[temp];
 }
 
+// Reads the six bytes at CONFIG_COV (0x42) .. CONFIG_OTT (0x47): the chip's OWN
+// over-voltage / under-voltage / over-temperature trip points and their delays.
+// These are the thresholds behind FAULT_STATUS[COV]/[CUV] and the hardware FAULT
+// pin -- separate from the software limits (VOLTLIMHI/VOLTLIMLO) in this
+// firmware. Read only: nothing is written to the module. Fills out[0..5] =
+// COV, COVT, CUV, CUVT, OT, OTT. Reply is [addr, reg, count, 6 data bytes, CRC].
+bool BMSModule::readProtectionConfig(uint8_t out[6])
+{
+    if ((int32_t)(bmbSimCommLossUntilMs - millis()) > 0) return false;   // simulated comm loss
+
+    uint8_t payload[3];
+    uint8_t buff[12] = {0};
+    payload[0] = moduleAddress << 1;
+    payload[1] = 0x42;      // CONFIG_COV
+    payload[2] = 6;         // six registers: 0x42 .. 0x47
+    int retLen = BMSUtil::sendDataWithReply(payload, 3, false, buff, 10);
+
+    if (retLen != 10 || buff[0] != (moduleAddress << 1) || buff[1] != 0x42) return false;
+    if (BMSUtil::genCRC(buff, 9) != buff[9]) return false;
+
+    for (int i = 0; i < 6; i++) out[i] = buff[3 + i];
+    return true;
+}
+
 // The Steinhart-Hart conversion in readModuleValues() takes logf() of a value
 // that goes negative when a thermistor is shorted, giving NaN. NaN fails every
 // ">" and "<" comparison, so the over/under-temperature limits would silently

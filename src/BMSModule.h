@@ -22,6 +22,7 @@ public:
     float getAvgTemp();
     float getModuleVoltage();
     float getTemperature(int temp);
+    bool readProtectionConfig(uint8_t out[6]);   // read-only: the BMB's own trip settings (registers 0x42-0x47)
     bool hasValidTemperatures();  // false if either thermistor reading is NaN/inf (open or shorted sensor)
     uint8_t getFaults();
     uint8_t getAlerts();

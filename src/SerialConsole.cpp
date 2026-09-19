@@ -149,6 +149,7 @@ void SerialConsole::printMenu() {
     Logger::console("   R = Renumber connected boards in sequence");
     Logger::console("   B or b = Run a balancing pass now (it also runs automatically every few seconds)");
     Logger::console("   1 to 6 = Toggle balancing on cell 1 to 6");
+    Logger::console("   k = Show each module's own over/under-voltage trip points (read-only)");
     Logger::console("   t = Inject a 5-second test fault (verify buzzer/display/history)");
     Logger::console("   x = Simulate losing contact with all BMB modules for 40 s (tests the NO COMMS fault)");
     Logger::console("   o = Toggle charger output ON/OFF");
@@ -677,6 +678,9 @@ void SerialConsole::handleShortCmd() {
         testFaultOverride = true;
         testFaultUntilMillis = millis() + 5000;
         Logger::console("Injecting a 5-second test fault -- buzzer should chirp, display should show FAULT, and fault history should update once it clears.");
+        break;
+    case 'k': case 'K':
+        bms.printProtectionSettings();
         break;
     case 'x': case 'X':
         bmbSimCommLossUntilMs = millis() + 40000;

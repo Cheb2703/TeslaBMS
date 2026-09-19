@@ -50,6 +50,7 @@ public:
     float getAvgCellVolt();
     float getLowCellVolt();
     float getHighestModuleVolt();
+    void printProtectionSettings();   // console 'k': each module's own OV/UV/OT trip points (read-only)
     void printPackSummary();
     void printPackDetails();
     void printJsonData();

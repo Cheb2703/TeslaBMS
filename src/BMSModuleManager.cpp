@@ -639,6 +639,38 @@ float BMSModuleManager::getAvgCellVolt()
     return avg;
 }
 
+// Console 'k'. Shows what the BMB chips themselves are set to trip at. Per the
+// BQ76PL536A datasheet: CONFIG_COV (0x42) trip = 2.0 V + 50 mV x value[5:0];
+// CONFIG_CUV (0x44) trip = 0.7 V + 100 mV x value[4:0]; bit 7 of either register
+// DISABLEs that check. A cell beyond a trip point sets FAULT_STATUS[COV]/[CUV]
+// and pulls the hardware FAULT line (GPIO4 here), which this firmware treats as
+// a charging-blocking fault.
+void BMSModuleManager::printProtectionSettings()
+{
+    int shown = 0;
+    for (int x = 1; x <= MAX_MODULE_ADDR; x++)
+    {
+        if (!modules[x].isExisting()) continue;
+        shown++;
+
+        uint8_t c[6];
+        if (!modules[x].readProtectionConfig(c))
+        {
+            Logger::console("Module %d: could not read the module's protection settings", x);
+            continue;
+        }
+
+        float ovTrip = 2.0f + 0.05f * (c[0] & 0x3F);
+        float uvTrip = 0.7f + 0.1f  * (c[2] & 0x1F);
+        Logger::console("Module %d: module's own over-voltage trip %f V%s, under-voltage trip %f V%s",
+                        x, ovTrip, (c[0] & 0x80) ? " (DISABLED)" : "", uvTrip, (c[2] & 0x80) ? " (DISABLED)" : "");
+        Logger::console("          raw: COV=%X COVT=%X CUV=%X CUVT=%X OT=%X OTT=%X", c[0], c[1], c[2], c[3], c[4], c[5]);
+    }
+    if (shown == 0) Logger::console("No modules found");
+    else Logger::console("(These are the chips' own trip points; the firmware's own limits are VOLTLIMHI=%f / VOLTLIMLO=%f)",
+                         settings.OverVSetpoint, settings.UnderVSetpoint);
+}
+
 void BMSModuleManager::printPackSummary()
 {
     uint8_t faults;
