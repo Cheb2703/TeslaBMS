@@ -58,7 +58,9 @@ extern bool     chargerCurveReapplyPending; // set here, applied in main.cpp's l
 extern float    chargerDailyTargetV;
 extern float    chargerFullTargetV;
 extern bool     chargerFullChargeOverride;
+extern bool     chargerFullChargeArmed;  // see main.cpp -- cleared whenever the override is toggled here
 extern void     applyChargeTargetVoltage();
+extern float    chargerRestartMaxV();    // highest allowed auto-restart point: daily target less a margin
 
 static bool s_lastFaultActive = false;   // updated each pushState(), read by the charger-output-on guard
 
@@ -438,13 +440,21 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
     }
     if (doc["fullChargeOverride"].is<bool>()) {
         chargerFullChargeOverride = doc["fullChargeOverride"].as<bool>();
+        // Nothing has been observed about this charge cycle yet, so the
+        // auto-revert has to wait for one to actually run -- see the FULLM
+        // check in main.cpp's loop(). Without this, an override switched on
+        // while the pack sits full at the daily limit cancels itself.
+        chargerFullChargeArmed = false;
         preferences.putBool("chgFullOvr", chargerFullChargeOverride);
         applyChargeTargetVoltage();
         curveChanged = true;
     }
 
     if (doc["restartVbat"].is<float>()) {
-        chargerRstVbat = clampf(doc["restartVbat"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
+        // Clamped against the DAILY target, not the pack ceiling: an
+        // auto-restart point at or above the target means the pack is always
+        // below it, so the charger restarts a cycle the moment it finishes one.
+        chargerRstVbat = clampf(doc["restartVbat"].as<float>(), NPB24_VOLT_MIN, chargerRestartMaxV());
         preferences.putFloat("chgRstVbat", chargerRstVbat);
         charger.setChgRstVbat(chargerRstVbat);
         curveChanged = true;
@@ -869,6 +879,7 @@ nav button.tab.active{color:var(--accent);}
       <div class="hint">Curve CV/FV are driven by the Daily/Full-Charge targets above -- edit them there. They're still shown/editable here for advanced ad-hoc testing, but get overwritten the next time the daily/full system re-asserts itself (boot, override toggle, or full-charge completion).</div>
       <label>Auto-restart-charge Voltage (V)</label>
       <input type="number" step="0.01" id="c_restartVbat">
+      <div class="hint">Pack voltage at which the charger starts a new cycle on its own, after it has self-discharged from the daily target. Must stay below the Daily Charge Target -- a higher value is pulled down automatically, because a pack that is always under the restart point would be charged non-stop.</div>
       <div class="formrow">
         <div><label>CC Timeout (min, 0=off)</label><input type="number" id="c_ccTimeout"></div>
         <div><label>CV Timeout (min, 0=off)</label><input type="number" id="c_cvTimeout"></div>

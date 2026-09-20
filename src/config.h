@@ -54,6 +54,43 @@
 // readings if a BMB cable comes loose or a board stops answering.
 #define BMB_COMM_FAIL_LIMIT       3
 
+// -- Charger auto-restart (top-up after self-discharge) -------------------------
+// The charger restarts a charge cycle by itself once the pack has fallen to
+// CHG_RST_VBAT, but ONLY if the RSTE bit in its SYSTEM_CONFIG register is set.
+// Nothing in the firmware used to set it, so the restart never happened. With
+// this at 1, setup() reads SYSTEM_CONFIG, sets RSTE if it is missing, and
+// writes it back once (a read-modify-write, so the other bits are untouched).
+// Set to 0 to leave the charger's own configuration alone; the pack then only
+// charges when you switch the output on by hand.
+// NOTE: like the other SYSTEM_CONFIG bits, RSTE takes effect on the charger's
+// NEXT AC power-up -- power-cycle the charger once after enabling this.
+#define CHARGER_ENABLE_AUTO_RESTART 1
+
+// How far BELOW the daily charge target the auto-restart point (CHG_RST_VBAT)
+// has to sit. The restart point is derived from the daily target rather than
+// entered blind, because a restart point at or above the target means the pack
+// is ALWAYS below it and the charger restarts a cycle for ever. The margin also
+// has to be wide enough that cell balancing dips don't retrigger a charge.
+//   CHARGER_RESTART_MIN_MARGIN_V = the smallest gap allowed; anything the web
+//     UI or console tries to set closer to the target than this is pulled down.
+//   CHARGER_RESTART_DEFAULT_MARGIN_V = the gap used before anything is saved
+//     (0.90 V on a 6S pack is 0.15 V/cell, i.e. restart at about 3.85 V/cell).
+#define CHARGER_RESTART_MIN_MARGIN_V     0.30f
+#define CHARGER_RESTART_DEFAULT_MARGIN_V 0.90f
+
+// -- Charge-target backstop ----------------------------------------------------
+// Stopping at the daily charge target is the CHARGER's job: the firmware writes
+// CURVE_CV and the charger regulates to it. If it ever doesn't -- a lost write,
+// or its CURVE_CONFIG set to a built-in lead-acid curve, which makes it ignore
+// CURVE_CV and run to its own, much higher boost voltage -- the pack would keep
+// charging until a single cell passed VOLTLIMHI, 0.20 V/cell above the target.
+// This is the earlier, pack-level catch: while the output is on, the cells
+// added together must not exceed the active target by more than this, or the
+// charger is switched off and a fault is raised. 0.50 V on a 6S pack is about
+// 0.08 V/cell, well clear of normal charging (in CC the pack is below the
+// target, in CV it sits at it) but well under the per-cell limit.
+#define CHARGE_TARGET_OVERSHOOT_V 0.50f
+
 //extern HardwareSerial Serial1; // Leftover from back in the day when this ran on arduino
 
 //Set to the proper port for your USB connection - SerialUSB on Due (Native) or Serial for Due (Programming) or Teensy

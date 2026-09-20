@@ -50,10 +50,11 @@
 // Tuned for this pack: 6S Li-ion, 4.20V/cell max = 25.2V. 22.5A CC / 2.25A TC
 // (10% taper cutoff) are well within the pack's actual capability (6s74p --
 // ~0.3A/cell at full rated current) and just reflect the charger's own max
-// output, not a pack-specific limit. RSTV (restart-to-charge threshold, only
-// active if SYSTEM_CONFIG's RSTE bit is enabled -- see CHGRAWW/CHGOPINIT) is
-// set just under the float voltage so the charger can auto-resume after real
-// self-discharge without restarting on every tiny BMS balancing dip.
+// output, not a pack-specific limit. RSTV (restart-to-charge threshold) is
+// derived from the daily charge target, not set blind -- see
+// chargerRestartMaxV()/applyChargeTargetVoltage(). SYSTEM_CONFIG's RSTE bit,
+// which is what makes the charger act on RSTV at all, is enabled by setup()
+// when CHARGER_ENABLE_AUTO_RESTART is on.
 //
 // IMPORTANT: CHARGER_INIT_VOLT/CHARGER_INIT_CURR are effectively historical --
 // chargerVoltage/chargerCurrent are aliases of chargerCurveCV/chargerCurveCC
@@ -66,7 +67,9 @@
 #define CHARGER_INIT_CURVE_CV   25.2f
 #define CHARGER_INIT_CURVE_FV   24.6f
 #define CHARGER_INIT_CURVE_TC   2.25f
-#define CHARGER_INIT_RSTV       24.6f
+// First-boot restart point: the daily target less the default margin. Kept as
+// a computed expression so it can never drift above the daily target again.
+#define CHARGER_INIT_RSTV       (CHARGER_INIT_DAILY_V - CHARGER_RESTART_DEFAULT_MARGIN_V)
 #define CHARGER_INIT_CCTO       0
 #define CHARGER_INIT_CVTO       0
 #define CHARGER_INIT_FVTO       0
@@ -148,6 +151,22 @@ uint16_t chargerFVTimeoutMin = CHARGER_INIT_FVTO;
 float chargerDailyTargetV       = CHARGER_INIT_DAILY_V;
 float chargerFullTargetV        = CHARGER_INIT_FULL_V;
 bool  chargerFullChargeOverride = false;  // true = charging toward chargerFullTargetV instead of chargerDailyTargetV
+
+// Guard for the "full charge finished, go back to the daily target" check in
+// loop(). The charger reports FULLM (fully charged) for as long as it thinks
+// the pack is full -- including BEFORE you switch the override on, which is
+// exactly when you'd switch it on (the pack is sitting at the daily limit).
+// Reverting on that stale bit cancelled the override seconds after it was
+// requested, so the pack never charged any further.
+//
+// The override is therefore only allowed to end once a charge cycle has
+// actually been SEEN running under it: this is set when the charger is on and
+// NOT reporting full, and only then does FULLM mean "the full charge we asked
+// for has finished". Cleared whenever the override is switched on or off (web
+// UI and console both do this) and after a revert. Deliberately not persisted:
+// after a reboot nothing has been observed yet, so the override waits for a
+// real cycle again.
+bool  chargerFullChargeArmed    = false;
 
 unsigned long rebootTime = 0;
 int packsConfigured;
@@ -309,6 +328,21 @@ float chargerVoltMax() {
     return ceiling;
 }
 
+// The highest the auto-restart point (CHG_RST_VBAT) may be: far enough below
+// the DAILY target that a pack charged to that target is genuinely above the
+// restart point and stays there until it has really self-discharged.
+//
+// Always the daily target, never the full-charge one: the full-charge target
+// is a one-off, and the system drops back to daily as soon as it is reached,
+// so the restart point that governs the pack's resting behaviour belongs to
+// the daily target.
+float chargerRestartMaxV() {
+    float top = chargerDailyTargetV - CHARGER_RESTART_MIN_MARGIN_V;
+    if (top > chargerVoltMax()) top = chargerVoltMax();
+    if (top < NPB24_VOLT_MIN)   top = NPB24_VOLT_MIN;
+    return top;
+}
+
 void applyChargeTargetVoltage() {
     chargerCurveCV = chargerFullChargeOverride ? chargerFullTargetV : chargerDailyTargetV;
     // Saved values (or an over-voltage limit lowered since) can sit above the
@@ -319,9 +353,86 @@ void applyChargeTargetVoltage() {
     }
     chargerVoltage = chargerCurveCV; // keep the CHGV/dashboard alias in sync
     chargerCurveFV = chargerCurveCV; // float, if entered, must never exceed the active target
+
+    // Keep the auto-restart point below the daily target. A value saved by an
+    // older build (the old default was 24.6 V, ABOVE the 24.0 V daily target)
+    // or a daily target lowered since would otherwise leave the pack forever
+    // under the restart point, so the charger would restart a cycle the moment
+    // it finished one. Not written back to Preferences from here -- this runs
+    // from WebUI request handlers too, where Preferences is already open --
+    // the live value is simply corrected on every boot and every target change.
+    if (chargerRstVbat > chargerRestartMaxV()) {
+        Logger::warn("Auto-restart point %f V is not below the daily target %f V, using %f V",
+                     chargerRstVbat, chargerDailyTargetV, chargerRestartMaxV());
+        chargerRstVbat = chargerRestartMaxV();
+    }
+
     if (chargerReady) {
         charger.setCurveCV(chargerCurveCV);
         charger.setCurveFV(chargerCurveFV);
+        charger.setChgRstVbat(chargerRstVbat);
+    }
+}
+
+// Makes the charger act on CHG_RST_VBAT, i.e. start a new charge cycle by
+// itself once the pack has fallen to that voltage, without anyone pressing
+// anything. That behaviour is gated by the RSTE bit in the charger's own
+// SYSTEM_CONFIG register, which nothing ever set -- so the auto-restart
+// simply never happened, no matter what CHG_RST_VBAT was.
+//
+// Read-modify-write of that one bit only (same approach as the console's
+// CHGOPINIT), and only when it is actually missing, so the charger's EEPROM
+// is written once rather than on every boot. Blocking CAN reads: setup()
+// only, never a request handler.
+void configureChargerAutoRestart() {
+#if CHARGER_ENABLE_AUTO_RESTART
+    uint16_t sysCfg;
+    if (!charger.readRaw(NPB_SYSTEM_CONFIG, sysCfg)) {
+        Logger::error("Charger auto-restart: could not read SYSTEM_CONFIG -- charger not responding");
+        return;
+    }
+    if (sysCfg & NPB_SYS_RSTE) {
+        Serial.printf("Charger auto-restart: already enabled (SYSTEM_CONFIG=0x%04X), restart point %.2f V\r\n",
+                      sysCfg, chargerRstVbat);
+        return;
+    }
+    uint16_t newCfg = (uint16_t)(sysCfg | NPB_SYS_RSTE);
+    if (charger.writeRaw(NPB_SYSTEM_CONFIG, newCfg)) {
+        Serial.printf("Charger auto-restart: RSTE enabled (SYSTEM_CONFIG 0x%04X -> 0x%04X), restart point %.2f V. "
+                      "SYSTEM_CONFIG changes take effect on the charger's NEXT AC power-up.\r\n",
+                      sysCfg, newCfg, chargerRstVbat);
+    } else {
+        Logger::error("Charger auto-restart: RSTE write failed -- charger not responding");
+    }
+#else
+    Serial.println("Charger auto-restart: disabled in config.h (CHARGER_ENABLE_AUTO_RESTART 0) -- the charger only charges when switched on by hand.");
+#endif
+}
+
+// Reads CURVE_CONFIG and says, out loud, whether the charger is actually going
+// to use the CURVE_CC/CV/FV/TC values this firmware writes. If it is on one of
+// its built-in lead-acid presets (or has the curve function switched off), our
+// daily target is stored and reads back fine but is ignored while charging --
+// the charger would run to its own boost voltage instead, and the only thing
+// left to stop it is the per-cell over-voltage fault. Worth a loud warning.
+//
+// Read-only: the bit positions come from the manual's table and this is the
+// owner's only charger, so fixing it is a deliberate, separate action (console
+// CHGCURVESEL=0). Blocking CAN read: setup()/console only.
+void checkChargerCurveConfig() {
+    uint16_t curveCfg;
+    if (!charger.readRaw(NPB_CURVE_CONFIG, curveCfg)) {
+        Logger::error("Charger curve config: could not read CURVE_CONFIG -- charger not responding");
+        return;
+    }
+    Serial.printf("Charger curve config: CURVE_CONFIG=0x%04X (%s)\r\n",
+                  curveCfg, ChargerNPB::curveConfigToString(curveCfg).c_str());
+    if ((curveCfg & NPB_CURVE_CUVS_MASK) != NPB_CURVE_CUVS_CUSTOM) {
+        Logger::error("Charger is set to a BUILT-IN lead-acid curve, not the customized one -- the charge target (%f V) will be IGNORED. Fix it with the console command CHGCURVESEL=0.",
+                      chargerCurveCV);
+    } else if (!(curveCfg & NPB_CURVE_CUVE)) {
+        Logger::error("Charger's charging-curve function is DISABLED -- the charge target (%f V) will be IGNORED. Check CURVE_CONFIG against the manual.",
+                      chargerCurveCV);
     }
 }
 
@@ -611,7 +722,7 @@ void setup()
         // what actually govern output current/voltage; chargerVoltage/
         // chargerCurrent are just the CHGV/CHGI aliases for these same values.
         charger.setCurveCC(chargerCurveCC);
-        applyChargeTargetVoltage(); // sets/pushes CURVE_CV and CURVE_FV from the daily/full-charge target system
+        applyChargeTargetVoltage(); // sets/pushes CURVE_CV, CURVE_FV and CHG_RST_VBAT from the daily/full-charge target system
         charger.setCurveTC(chargerCurveTC);
         charger.setChgRstVbat(chargerRstVbat);
         charger.setCurveCCTimeoutMinutes(chargerCCTimeoutMin);
@@ -644,6 +755,13 @@ void setup()
         } else {
             Serial.println("Charger CAN: still no replies to individual reads.");
         }
+
+        // The two charger-side settings the daily-limit system depends on but
+        // cannot set through the normal curve registers: whether the charger
+        // restarts a cycle on its own (RSTE, enabled here), and whether it
+        // honours our curve values at all (CURVE_CONFIG, reported here).
+        configureChargerAutoRestart();
+        checkChargerCurveConfig();
     } else {
         Serial.println("Charger CAN failed to start -- continuing without charger.");
     }
@@ -873,6 +991,56 @@ void loop()
             dd.chargerLastRxAgoMs = cd.online ? (millis() - cd.lastRxMs) : 0xFFFFFFFF;
         }
 
+        // Charge-target backstop. Stopping at the daily target is the CHARGER's
+        // job (it regulates to CURVE_CV); nothing here commands the stop. So if
+        // the charger ignores that target -- a lost write, or CURVE_CONFIG
+        // switched to one of its built-in lead-acid curves, which would send it
+        // to its own much higher boost voltage -- the only thing left to catch
+        // it used to be the per-cell over-voltage fault, 0.20 V/cell above the
+        // daily target. This is the earlier, pack-level check: while the output
+        // is actually on, the cells added together must not exceed the active
+        // target by more than CHARGE_TARGET_OVERSHOOT_V.
+        //
+        // It cannot nuisance-trip on a charger that IS regulating: in CC the
+        // pack is still below the target, in CV it sits AT it, and the BMS's
+        // own cell sum reads lower than the charger's terminals (cable drop),
+        // never higher. It is skipped while the output is off, where a pack
+        // above the target just means the target was lowered since.
+        //
+        // Switches the charger off and cancels the pending resume, like the
+        // read-back mismatch does: this means "the charger is not doing what it
+        // was told", so it stays off until someone turns it on deliberately.
+        // The fault itself clears once the voltage falls, so the alarm doesn't
+        // stick for ever -- the charger still stays off.
+        {
+            static bool overTargetLatched = false;
+            bool overTarget = dd.packVoltage > chargerCurveCV + CHARGE_TARGET_OVERSHOOT_V;
+            bool outputOn   = chargerReady && charger.data().online && charger.data().outputOn;
+
+            if (overTarget && outputOn && !overTargetLatched) {
+                overTargetLatched = true;
+                Logger::error("Pack is %f V with a charge target of %f V -- the charger is not holding the target. Switching it off.",
+                              dd.packVoltage, chargerCurveCV);
+                desiredChargerOn = false;
+                resumeChargerAfterFault = false;
+                if (!charger.setOutput(false))
+                    Logger::error("Charge-target backstop: charger OFF command failed -- charger not responding, will retry");
+            }
+            // Held until the pack really is back under the target, so the
+            // buzzer, LCD and fault page show it for more than the one second
+            // it took to switch the charger off.
+            if (overTargetLatched) {
+                if (overTarget) {
+                    char reason[40];
+                    snprintf(reason, sizeof(reason), "PACK OVER TARGET %.2fV", dd.packVoltage);
+                    bms.reportFault("CHGOVER", reason);
+                } else {
+                    overTargetLatched = false;
+                    bms.clearFaultById("CHGOVER");
+                }
+            }
+        }
+
         // Buzzer. A fault that blocks charging always sounds it. An alarm-only
         // fault (low cell voltage) sounds it only while the charger is NOT
         // running: once charging is under way the pack is being recovered, so
@@ -1046,15 +1214,30 @@ void loop()
             }
         }
 
-        // Full-charge override auto-revert: once the charger itself reports
-        // FULLM (fully charged) while we're in override mode, drop back to
-        // the daily target so the NEXT charge cycle (tonight, or whenever it
-        // next restarts) aims for the daily limit again instead of staying
-        // parked at the full-charge target indefinitely.
+        // Full-charge override auto-revert: once the charger reports FULLM
+        // (fully charged) for a charge cycle that actually ran under the
+        // override, drop back to the daily target so the NEXT cycle aims for
+        // the daily limit again instead of staying parked at the full-charge
+        // target indefinitely.
+        //
+        // "that actually ran under the override" is the whole point of
+        // chargerFullChargeArmed. FULLM is still set from the previous cycle
+        // when you switch the override on -- the pack is sitting at the daily
+        // limit, which is exactly why you want a full charge -- and reverting
+        // on that stale bit cancelled the override within three seconds,
+        // before the curve had even been re-applied. So: only arm once the
+        // charger is running and NOT reporting full, and only revert on FULLM
+        // after that.
         if (chargerFullChargeOverride) {
             const ChargerData& cd = charger.data();
-            if (cd.online && (cd.chgStatus & NPB_CHG_FULLM)) {
+            bool fullNow = cd.online && (cd.chgStatus & NPB_CHG_FULLM);
+            if (cd.online && cd.outputOn && !fullNow && !chargerFullChargeArmed) {
+                chargerFullChargeArmed = true;
+                Logger::info("Full-charge override: charging to %fV, will return to the daily target when the charger reports full", chargerCurveCV);
+            }
+            if (fullNow && chargerFullChargeArmed) {
                 chargerFullChargeOverride = false;
+                chargerFullChargeArmed    = false;
                 preferences.begin("settings", false);
                 preferences.putBool("chgFullOvr", false);
                 preferences.end();

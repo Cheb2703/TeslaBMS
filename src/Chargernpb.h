@@ -120,6 +120,27 @@ enum NPBCmd : uint16_t {
 #define NPB_CHG_CVTOF       (1 << 14)  // CV-stage timeout occurred
 #define NPB_CHG_FVTOF       (1 << 15)  // float-stage timeout occurred
 
+// ── Curve config bit masks (0x00B4, CURVE_CONFIG) ───────────────────────────
+// This register decides whether the charger uses the CURVE_CC/CV/FV/TC values
+// this firmware writes at all, or one of its own built-in lead-acid presets.
+// If it is on a preset, our CURVE_CV is still stored (and still reads back
+// correctly, so the read-back check passes) but is IGNORED while charging --
+// the charger would run to its own boost voltage instead of the daily target.
+// Nothing here is written automatically; setup() only reads it and warns.
+// Bit positions are from the manual's CURVE_CONFIG table -- check them against
+// your own copy before writing this register.
+#define NPB_CURVE_CUVS_MASK   0x0003   // bits 1-0: curve selection
+#define NPB_CURVE_CUVS_CUSTOM 0x0000   //   00 = customized (what this firmware needs)
+                                       //   01 = Gel, 10 = Flooded, 11 = AGM (built-in presets)
+#define NPB_CURVE_TCS_MASK    0x000C   // bits 3-2: temperature compensation (00 = off)
+#define NPB_CURVE_STGS_2STAGE (1 << 7) // bit 7: 0 = 3-stage (CC/CV/float), 1 = 2-stage (CC/CV)
+#define NPB_CURVE_CUVE        (1 << 8) // bit 8: 1 = charging-curve function enabled
+
+// ── System config bit masks (0x00C2, SYSTEM_CONFIG) ─────────────────────────
+#define NPB_SYS_OPERATION_INIT_MASK 0x0006 // bits 2-1: output state at AC power-on
+#define NPB_SYS_RSTE                (1 << 3) // 1 = act on CHG_RST_VBAT and restart a charge cycle by itself
+#define NPB_SYS_EEP_OFF             (1 << 10)
+
 // ── Snapshot of everything read back from the charger ───────────────────────
 struct ChargerData {
     bool     online;        // did we get any valid reply this poll cycle
@@ -263,6 +284,7 @@ public:
     static bool isFaulted(uint16_t faultWord);
     static String faultToString(uint16_t faultWord);
     static String chgStatusToString(uint16_t chgStatusWord);
+    static String curveConfigToString(uint16_t curveConfigWord);
 
 private:
     uint32_t _txId;         // pre-computed host->charger arbitration ID

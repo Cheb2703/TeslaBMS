@@ -59,7 +59,9 @@ extern bool     chargerReady;       // true once charger.begin() succeeded at bo
 extern float    chargerDailyTargetV;
 extern float    chargerFullTargetV;
 extern bool     chargerFullChargeOverride;
+extern bool     chargerFullChargeArmed;  // see main.cpp -- cleared whenever the override is toggled here
 extern void     applyChargeTargetVoltage();
+extern float    chargerRestartMaxV();    // highest allowed auto-restart point: daily target less a margin
 
 // Shared by every CHGxxx curve-parameter command below. Curve-family
 // registers (CURVE_CC/CV/FV/TC, CHG_RST_VBAT, the *_TIMEOUT registers) only
@@ -169,7 +171,7 @@ void SerialConsole::printMenu() {
     Logger::console("\nCHARGER CONTROLS (MEAN WELL NPB-750-24, CANBus)\n");
     Logger::console("   NOTE: charger voltage settings are capped at %f V (%d cells x VOLTLIMHI), whatever range is shown below.", chargerVoltMax(), CELLS_IN_SERIES);
     Logger::console("   o = Toggle charger output ON/OFF");
-    Logger::console("   y = Print charger status now (measured values, faults)");
+    Logger::console("   y = Print charger status now (measured values, faults, SYSTEM_CONFIG/CURVE_CONFIG)");
     Logger::console("   u = Toggle full-charge override (daily-limit charging otherwise)");
     Logger::console("   CHGDAILYV=%f - Everyday charge target, ~80%% SOC (21.0-42.0V)", chargerDailyTargetV);
     Logger::console("   CHGFULLV=%f  - Full-charge override target (21.0-42.0V)", chargerFullTargetV);
@@ -179,7 +181,7 @@ void SerialConsole::printMenu() {
     Logger::console("   CHGCV=%f   - Curve constant-voltage target (21.0-42.0V)*", chargerCurveCV);
     Logger::console("   CHGFV=%f   - Curve float-voltage target (21.0-42.0V)*", chargerCurveFV);
     Logger::console("   CHGTC=%f   - Curve taper-current cutoff (0-22.5A)*", chargerCurveTC);
-    Logger::console("   CHGRSTV=%f - Auto-restart-charge voltage point (21.0-42.0V)*", chargerRstVbat);
+    Logger::console("   CHGRSTV=%f - Auto-restart-charge voltage point, must stay below CHGDAILYV (max %f V now)*", chargerRstVbat, chargerRestartMaxV());
     Logger::console("   CHGCCTO=%d - CC-stage timeout in minutes, 0=disabled*", chargerCCTimeoutMin);
     Logger::console("   CHGCVTO=%d - CV-stage timeout in minutes, 0=disabled*", chargerCVTimeoutMin);
     Logger::console("   CHGFVTO=%d - Float-stage timeout in minutes, 0=disabled*", chargerFVTimeoutMin);
@@ -192,6 +194,9 @@ void SerialConsole::printMenu() {
     Logger::console("   CHGOPINIT=0 - SYSTEM_CONFIG power-on behavior (0=OFF/recommended, 1=ON, 2=last state)");
     Logger::console("     Only touches the OPERATION_INIT bits, leaves RSTE/EEP_OFF/etc. untouched.");
     Logger::console("     Takes effect on the charger's NEXT AC power-up, not live.");
+    Logger::console("   CHGCURVESEL=0 - CURVE_CONFIG curve selection (0=customized/required, 1=Gel, 2=Flooded, 3=AGM)");
+    Logger::console("     Only needed if 'y' reports anything other than CUSTOM_CURVE: on a preset the");
+    Logger::console("     charger ignores the charge target above and runs its own lead-acid voltages.");
 
     Logger::console("   \nz = Restart the Board");
 
@@ -504,7 +509,10 @@ void SerialConsole::handleConfigCmd() {
             Logger::console("CHGTC: saved %f but write to charger failed -- charger not responding", chargerCurveTC);
     } else if (cmdString == String("CHGRSTV")) {
         float oldVal = chargerRstVbat;
-        chargerRstVbat = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > chargerVoltMax() ? chargerVoltMax() : newFloat);
+        // Clamped against the DAILY target, not the pack ceiling: an
+        // auto-restart point at or above the target means the pack is always
+        // below it, so the charger restarts a cycle the moment it finishes one.
+        chargerRstVbat = newFloat < NPB24_VOLT_MIN ? NPB24_VOLT_MIN : (newFloat > chargerRestartMaxV() ? chargerRestartMaxV() : newFloat);
         preferences.begin("settings", false);
         preferences.putFloat("chgRstVbat", chargerRstVbat);
         preferences.end();
@@ -608,6 +616,35 @@ void SerialConsole::handleConfigCmd() {
                 }
             }
         }
+    } else if (cmdString == String("CHGCURVESEL")) {
+        // Sets ONLY the curve-selection bits (1-0, CUVS) of CURVE_CONFIG
+        // (0x00B4). This is what decides whether the charger charges to the
+        // CURVE_CV value this firmware writes -- the daily/full-charge target
+        // -- or to one of its own built-in lead-acid presets, in which case
+        // our target is stored, reads back correctly, and is still ignored:
+        //   0 = customized curve (what this firmware needs)
+        //   1 = Gel, 2 = Flooded, 3 = AGM (the charger's own presets)
+        // Only needed if 'y' reports something other than CUSTOM_CURVE.
+        // Reads the register first and rewrites bits 1-0 only, so the stage
+        // and temperature-compensation bits are left exactly as they were.
+        if (newValue < 0 || newValue > 3) {
+            Logger::console("Invalid CHGCURVESEL value. Use 0=customized (what this firmware needs), 1=Gel, 2=Flooded, 3=AGM.");
+        } else {
+            uint16_t raw;
+            if (!charger.readRaw(NPB_CURVE_CONFIG, raw)) {
+                Logger::console("CHGCURVESEL: couldn't read current CURVE_CONFIG -- charger not responding");
+            } else {
+                uint16_t newRaw = (uint16_t)((raw & ~(uint16_t)NPB_CURVE_CUVS_MASK) | (uint16_t)newValue);
+                if (charger.writeRaw(NPB_CURVE_CONFIG, newRaw)) {
+                    Logger::console("CHGCURVESEL: CURVE_CONFIG was %X (%s), now %X (%s).",
+                                     raw, ChargerNPB::curveConfigToString(raw).c_str(),
+                                     newRaw, ChargerNPB::curveConfigToString(newRaw).c_str());
+                    Logger::console("Takes effect on the charger's next on/off toggle or AC power-up -- switch the output off and on with 'o' to apply it now.");
+                } else {
+                    Logger::console("CHGCURVESEL: write failed -- charger not responding");
+                }
+            }
+        }
     } else {
         Logger::console("Unknown command");
     }
@@ -692,13 +729,33 @@ void SerialConsole::handleShortCmd() {
             bool eepOff = (sysCfg & (1 << 10)) != 0;
             Logger::console("  SYSTEM_CONFIG=%X  OPERATION_INIT=%d (%s)  RSTE=%d  EEP_OFF=%d",
                              sysCfg, opInit, opInitDesc[opInit], rste, eepOff);
+            if (!rste)
+                Logger::console("  RSTE is OFF -- the charger will NOT restart a charge cycle on its own at %fV. Set CHARGER_ENABLE_AUTO_RESTART to 1 in config.h and reboot, then AC power-cycle the charger.", chargerRstVbat);
         } else {
             Logger::console("  SYSTEM_CONFIG: no reply");
+        }
+        // CURVE_CONFIG decides whether the CURVE_CC/CV/FV/TC values this
+        // firmware writes actually govern charging, or whether the charger
+        // runs one of its own lead-acid presets and ignores them.
+        uint16_t curveCfg;
+        if (charger.readRaw(NPB_CURVE_CONFIG, curveCfg)) {
+            Logger::console("  CURVE_CONFIG=%X (%s)", curveCfg, ChargerNPB::curveConfigToString(curveCfg).c_str());
+            if ((curveCfg & NPB_CURVE_CUVS_MASK) != NPB_CURVE_CUVS_CUSTOM)
+                Logger::console("  NOT on the customized curve -- the charge target %fV is being IGNORED. Fix with CHGCURVESEL=0", chargerCurveCV);
+            else if (!(curveCfg & NPB_CURVE_CUVE))
+                Logger::console("  Charging-curve function is DISABLED -- the charge target %fV is being IGNORED.", chargerCurveCV);
+        } else {
+            Logger::console("  CURVE_CONFIG: no reply");
         }
         break;
     }
     case 'u': case 'U': {
         chargerFullChargeOverride = !chargerFullChargeOverride;
+        // Nothing has been observed about this charge cycle yet, so the
+        // auto-revert has to wait for one to actually run -- see the FULLM
+        // check in main.cpp's loop(). Without this, an override switched on
+        // while the pack sits full at the daily limit cancels itself.
+        chargerFullChargeArmed = false;
         preferences.begin("settings", false);
         preferences.putBool("chgFullOvr", chargerFullChargeOverride);
         preferences.end();
