@@ -679,6 +679,23 @@ void setup()
 
     preferences.end();
 
+    // An auto-restart point saved by an older build can sit above the daily
+    // target (the old default, 24.6 V, was above the 24.0 V daily target).
+    // applyChargeTargetVoltage() corrects the live value every time it runs,
+    // but it can't write to Preferences -- it also runs from WebUI handlers,
+    // where Preferences is already open. So do the one-off correction here,
+    // where this is the only thing touching it, and the warning is printed
+    // once rather than on every boot.
+    if (chargerRstVbat > chargerRestartMaxV()) {
+        float corrected = chargerRestartMaxV();
+        Serial.printf("Saved auto-restart point %.2f V is not below the daily target %.2f V -- saving %.2f V instead.\r\n",
+                      chargerRstVbat, chargerDailyTargetV, corrected);
+        chargerRstVbat = corrected;
+        preferences.begin("settings", false);
+        preferences.putFloat("chgRstVbat", chargerRstVbat);
+        preferences.end();
+    }
+
     Serial.println("Loaded settings from flash (NVS):");
     Serial.printf("  LOGLEVEL:   %u\r\n",  settings.logLevel);
     Serial.printf("  VOLTLIMHI:  %.3f\r\n", settings.OverVSetpoint);
