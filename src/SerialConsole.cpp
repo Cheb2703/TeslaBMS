@@ -742,8 +742,6 @@ void SerialConsole::handleShortCmd() {
             Logger::console("  CURVE_CONFIG=%X (%s)", curveCfg, ChargerNPB::curveConfigToString(curveCfg).c_str());
             if ((curveCfg & NPB_CURVE_CUVS_MASK) != NPB_CURVE_CUVS_CUSTOM)
                 Logger::console("  NOT on the customized curve -- the charge target %fV is being IGNORED. Fix with CHGCURVESEL=0", chargerCurveCV);
-            else if (!(curveCfg & NPB_CURVE_CUVE))
-                Logger::console("  Charging-curve function is DISABLED -- the charge target %fV is being IGNORED.", chargerCurveCV);
         } else {
             Logger::console("  CURVE_CONFIG: no reply");
         }

@@ -127,14 +127,19 @@ enum NPBCmd : uint16_t {
 // correctly, so the read-back check passes) but is IGNORED while charging --
 // the charger would run to its own boost voltage instead of the daily target.
 // Nothing here is written automatically; setup() only reads it and warns.
-// Bit positions are from the manual's CURVE_CONFIG table -- check them against
-// your own copy before writing this register.
+//
+// ONLY the curve-selection bits are decoded. This pack's charger reads
+// CURVE_CONFIG = 0x0084 and demonstrably does hold the CURVE_CV target (bench
+// test, 2026-09-25: commanded 21.50 V, regulated at 21.50 V and reported
+// FULLY_CHARGED at the taper current). So selection 00 = customized is
+// confirmed -- but an earlier reading of bit 8 as "curve function enabled"
+// would have called that same working charger DISABLED, which proves the rest
+// of the manual's bit table was transcribed wrong here. The other bits are
+// therefore reported raw rather than guessed at. Do not add decodes for them
+// without checking a known-good copy of the manual against real readings.
 #define NPB_CURVE_CUVS_MASK   0x0003   // bits 1-0: curve selection
 #define NPB_CURVE_CUVS_CUSTOM 0x0000   //   00 = customized (what this firmware needs)
                                        //   01 = Gel, 10 = Flooded, 11 = AGM (built-in presets)
-#define NPB_CURVE_TCS_MASK    0x000C   // bits 3-2: temperature compensation (00 = off)
-#define NPB_CURVE_STGS_2STAGE (1 << 7) // bit 7: 0 = 3-stage (CC/CV/float), 1 = 2-stage (CC/CV)
-#define NPB_CURVE_CUVE        (1 << 8) // bit 8: 1 = charging-curve function enabled
 
 // ── System config bit masks (0x00C2, SYSTEM_CONFIG) ─────────────────────────
 #define NPB_SYS_OPERATION_INIT_MASK 0x0006 // bits 2-1: output state at AC power-on

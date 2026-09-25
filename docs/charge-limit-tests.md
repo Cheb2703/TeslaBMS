@@ -16,32 +16,26 @@ complete, real charge cycle in a few minutes.
 
 ---
 
-## 1. Boot check — 2 minutes, no charging
+## 1. Config check — 1 minute, no charging, no USB
 
-Reboot the board (console `z`) and read the boot log.
+Web UI → Charging → **Charge Target** card. Three rows show the charger's own
+configuration, refreshed every 10 seconds:
 
-**Expect three lines:**
-
-| Line | What it means |
+| Row | Want to see |
 |---|---|
-| `Charger auto-restart: RSTE enabled (SYSTEM_CONFIG 0x…. -> 0x….)` | the auto-restart was off and has just been switched on |
-| `Charger curve config: CURVE_CONFIG=0x…. (CUSTOM_CURVE CURVE_ENABLED …)` | the charger will use our charge target |
-| `Saved auto-restart point 24.60 V is not below the daily target 24.00 V — saving 23.70 V instead.` | the old bad restart point being corrected, once |
+| **Charger Curve** | green `CUSTOM_CURVE` — the charger will use your charge target |
+| **Auto-restart (RSTE)** | green `enabled` — the charger will restart a cycle on its own |
+| **Restart At** | a voltage below the Daily Charge Target |
 
-**If `CURVE_CONFIG` says `PRESET_GEL`, `PRESET_FLOODED`, `PRESET_AGM` or `CURVE_DISABLED`:**
-the charger is ignoring your charge target. Fix it:
+**If Charger Curve is red** (`PRESET_GEL` / `PRESET_FLOODED` / `PRESET_AGM`) the charger
+is ignoring your charge target and running its own lead-acid voltages. That one needs
+USB: console `CHGCURVESEL=0`, then `o` twice to latch it.
 
-```
-CHGCURVESEL=0
-```
+**If Auto-restart shows `off`:** switch the charger's AC off and on once — SYSTEM_CONFIG
+changes only take effect at AC power-up — then reload the page. If it is still `off`
+after an AC power-cycle, see the open item at the bottom of this file.
 
-then `o` twice (off, on) to latch it, and reboot with `z` to confirm it now reads `CUSTOM_CURVE`.
-
-**If you saw `RSTE enabled`:** switch the charger's AC off and on once — SYSTEM_CONFIG
-changes only take effect at AC power-up. Then `z` again; it should now say
-`auto-restart: already enabled`.
-
-✅ **Pass:** second boot shows `already enabled` and `CUSTOM_CURVE CURVE_ENABLED`.
+✅ **Pass:** Charger Curve green, Auto-restart `enabled`, Restart At below the target.
 
 ---
 
@@ -68,6 +62,18 @@ That means the charger is not obeying `CURVE_CV`; go back to test 1 and check
 `CURVE_CONFIG`.
 
 Leave it sitting for 10 minutes and check the voltage is still parked at the target.
+
+> **Getting to `FULLY_CHARGED` quickly.** The charger only declares full when the
+> taper current falls below **Curve TC**, and a half-charged 10 kWh pack will happily
+> swallow 15 A at a low target for hours. The trick is to set the daily target only
+> just above where the pack already sits: the current then starts *below* the taper
+> cutoff and it reports full within seconds. On the 2026-09-25 run, a target of
+> 21.50 V with the pack at 21.38 V reached `FULLY_CHARGED` in 15 seconds.
+>
+> **Do not raise Curve TC to force this.** This charger clamps `CURVE_TC` to
+> **6.75 A** (30 % of its 22.5 A rating) and silently keeps its old value. The
+> read-back check then sees the mismatch and — correctly — switches the output off
+> after three strikes. Anything above 6.75 A will do that.
 
 ---
 
@@ -184,3 +190,40 @@ Put the real values back:
 - **Auto-restart-charge Voltage** → `23.10` (3.85 V/cell)
 
 and leave the charger **Output ON** so the auto-restart has something to act on.
+
+---
+
+## Results of the 2026-09-25 run
+
+Run remotely over the HTTP API against the real pack (2 modules, 21.3 V, 51 % SoC).
+
+| Test | Result |
+|---|---|
+| 1 — config visible | Curve `CUSTOM_CURVE` (0x0084) ✅ · **Auto-restart still `off`** ❌ (see below) |
+| 2 — stops at target | ✅ regulated at exactly 21.50 V, `FLOAT_STAGE FULLY_CHARGED`, float held at the target not above it |
+| 3 — override sticks | ✅ took effect in 8 s, cleared `FULLY_CHARGED`, resumed at 19.9 A, held for 2 min; reverted to the daily target by itself on the next `FULLY_CHARGED` |
+| 3b — override with output off | ✅ held 65 s (note: this charger reports `IDLE`, not `FULLY_CHARGED`, while the output is off, so the stale-full trap does not arise on this path — test 3 is the decisive one) |
+| 4 — restart point clamp | ✅ wrote 24.50 V, device stored 23.70 V; live re-clamp to 21.30 V when the target moved to 21.60 V |
+| 5 — over-target backstop | ✅ `PACK OVER TARGET 21.52V`, output off in under 3 s, buzzer heard, no auto-resume |
+| — read-back protection | ✅ unplanned: `CURVE_TC` 15 A was clamped to 6.75 A by the charger, mismatch caught 3× and the output switched off |
+
+Also confirmed: `FV == CV` is accepted by this charger (`read-back OK: CV=21.500 FV=21.500`),
+which had been an open risk — a rejection there would have switched the charger off.
+
+### Open item: RSTE will not set
+
+`configureChargerAutoRestart()` sends the read-modify-write at boot, but `SYSTEM_CONFIG`
+still reads `0x0001` afterwards — bit 3 never sticks, so the charger will not restart a
+cycle on its own and the pack will sit at the daily target until someone presses
+**Output ON**. Nothing else is affected.
+
+Three things to try, in order:
+
+1. **AC power-cycle the charger**, then reload the Charging tab. The manual says
+   SYSTEM_CONFIG only takes effect at AC power-up; it may also only read back then.
+2. **Check bit 3 really is RSTE** for this model. The `CURVE_CONFIG` table in the same
+   manual was transcribed wrong here (an earlier decode called a demonstrably working
+   charger "curve disabled"), so the SYSTEM_CONFIG table deserves the same suspicion.
+3. **Try the write by hand** with USB attached: `CHGRAWR=0xC2` to read, `CHGRAWW=0xC2,0x0009`
+   to write, `CHGRAWR=0xC2` to read back. If it still reads `0x0001`, the charger is
+   refusing the write and the bit position or the write method is wrong.

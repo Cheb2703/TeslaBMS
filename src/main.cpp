@@ -374,6 +374,25 @@ void applyChargeTargetVoltage() {
     }
 }
 
+// Last values read from the charger's two configuration registers, so the web
+// UI can show them. Without this the only way to see them is a USB cable and
+// the serial console's 'y' -- and these two registers are exactly what decides
+// whether the daily charge limit and the auto-restart work at all, so they
+// belong on the Charging tab where they can be checked at any time.
+// 0xFFFF means "not read yet / charger did not answer".
+uint16_t chargerSysConfigRaw   = 0xFFFF;
+uint16_t chargerCurveConfigRaw = 0xFFFF;
+
+// Refreshes the two cached registers above. Blocking CAN reads that share
+// poll()'s receive queue, so loop()/setup() context only -- never a request
+// handler. Cheap: two reads, and loop() only calls it every 10 seconds.
+void refreshChargerConfigSnapshot() {
+    if (!chargerReady) return;
+    uint16_t v;
+    if (charger.readRaw(NPB_SYSTEM_CONFIG, v)) chargerSysConfigRaw   = v;
+    if (charger.readRaw(NPB_CURVE_CONFIG,  v)) chargerCurveConfigRaw = v;
+}
+
 // Makes the charger act on CHG_RST_VBAT, i.e. start a new charge cycle by
 // itself once the pack has fallen to that voltage, without anyone pressing
 // anything. That behaviour is gated by the RSTE bit in the charger's own
@@ -391,6 +410,7 @@ void configureChargerAutoRestart() {
         Logger::error("Charger auto-restart: could not read SYSTEM_CONFIG -- charger not responding");
         return;
     }
+    chargerSysConfigRaw = sysCfg;
     if (sysCfg & NPB_SYS_RSTE) {
         Serial.printf("Charger auto-restart: already enabled (SYSTEM_CONFIG=0x%04X), restart point %.2f V\r\n",
                       sysCfg, chargerRstVbat);
@@ -398,6 +418,7 @@ void configureChargerAutoRestart() {
     }
     uint16_t newCfg = (uint16_t)(sysCfg | NPB_SYS_RSTE);
     if (charger.writeRaw(NPB_SYSTEM_CONFIG, newCfg)) {
+        chargerSysConfigRaw = newCfg;
         Serial.printf("Charger auto-restart: RSTE enabled (SYSTEM_CONFIG 0x%04X -> 0x%04X), restart point %.2f V. "
                       "SYSTEM_CONFIG changes take effect on the charger's NEXT AC power-up.\r\n",
                       sysCfg, newCfg, chargerRstVbat);
@@ -425,13 +446,11 @@ void checkChargerCurveConfig() {
         Logger::error("Charger curve config: could not read CURVE_CONFIG -- charger not responding");
         return;
     }
+    chargerCurveConfigRaw = curveCfg;
     Serial.printf("Charger curve config: CURVE_CONFIG=0x%04X (%s)\r\n",
                   curveCfg, ChargerNPB::curveConfigToString(curveCfg).c_str());
     if ((curveCfg & NPB_CURVE_CUVS_MASK) != NPB_CURVE_CUVS_CUSTOM) {
         Logger::error("Charger is set to a BUILT-IN lead-acid curve, not the customized one -- the charge target (%f V) will be IGNORED. Fix it with the console command CHGCURVESEL=0.",
-                      chargerCurveCV);
-    } else if (!(curveCfg & NPB_CURVE_CUVE)) {
-        Logger::error("Charger's charging-curve function is DISABLED -- the charge target (%f V) will be IGNORED. Check CURVE_CONFIG against the manual.",
                       chargerCurveCV);
     }
 }
@@ -1277,6 +1296,12 @@ void loop()
         if (WiFi.status() == WL_CONNECTED) {
             flashBlue(3);
         }
+
+        // Keep the charger's two configuration registers fresh for the web UI.
+        // They only change if someone changes them, so once every 10 s is
+        // plenty -- and it means a CHGCURVESEL or an AC power-cycle shows up
+        // on the Charging tab without needing a USB cable.
+        refreshChargerConfigSnapshot();
 
         // Re-scan for missing modules. Renumbering resets EVERY board on the ring,
         // so don't do it every 10 s forever: back off (10 s, 20 s, 40 s, then

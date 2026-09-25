@@ -495,20 +495,19 @@ String ChargerNPB::chgStatusToString(uint16_t c) {
     return s;
 }
 
-// Decodes CURVE_CONFIG (0x00B4). "CUSTOM_CURVE" is the only selection under
-// which the CURVE_CC/CV/FV/TC values this firmware writes actually govern
-// charging -- see the bit-mask comments in Chargernpb.h.
+// Decodes CURVE_CONFIG (0x00B4). Only the curve-selection bits are decoded:
+// they are the ones that decide whether the CURVE_CC/CV/FV/TC values this
+// firmware writes govern charging, and they are the ones this pack's charger
+// has confirmed on the bench (it reads 0x0084, i.e. selection 00, and it does
+// hold the CURVE_CV target exactly). The remaining bits are shown raw rather
+// than guessed at -- see the note in Chargernpb.h.
 String ChargerNPB::curveConfigToString(uint16_t c) {
     String s;
     switch (c & NPB_CURVE_CUVS_MASK) {
-        case 0:  s += "CUSTOM_CURVE ";   break;
-        case 1:  s += "PRESET_GEL ";     break;
-        case 2:  s += "PRESET_FLOODED "; break;
-        default: s += "PRESET_AGM ";     break;
+        case 0:  s += "CUSTOM_CURVE";   break;
+        case 1:  s += "PRESET_GEL";     break;
+        case 2:  s += "PRESET_FLOODED"; break;
+        default: s += "PRESET_AGM";     break;
     }
-    s += (c & NPB_CURVE_CUVE) ? "CURVE_ENABLED " : "CURVE_DISABLED ";
-    s += (c & NPB_CURVE_STGS_2STAGE) ? "2_STAGE " : "3_STAGE ";
-    if (c & NPB_CURVE_TCS_MASK) s += "TEMP_COMP_ON ";
-    s.trim();
     return s;
 }

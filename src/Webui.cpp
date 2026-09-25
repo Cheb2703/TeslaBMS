@@ -59,6 +59,8 @@ extern float    chargerDailyTargetV;
 extern float    chargerFullTargetV;
 extern bool     chargerFullChargeOverride;
 extern bool     chargerFullChargeArmed;  // see main.cpp -- cleared whenever the override is toggled here
+extern uint16_t chargerSysConfigRaw;     // charger SYSTEM_CONFIG, cached by loop() -- see main.cpp
+extern uint16_t chargerCurveConfigRaw;   // charger CURVE_CONFIG, cached by loop() -- see main.cpp
 extern void     applyChargeTargetVoltage();
 extern float    chargerRestartMaxV();    // highest allowed auto-restart point: daily target less a margin
 
@@ -181,6 +183,26 @@ String WebUIManager::buildStateJson(const DisplayData& dd) {
     chg["lastRxAgoMs"]  = dd.chargerLastRxAgoMs;
     chg["fullChargeOverride"] = chargerFullChargeOverride;
     chg["activeTargetV"]      = serialized(safeFloatStr(chargerCurveCV, 2));
+
+    // The charger's own two configuration registers, cached by loop() (see
+    // refreshChargerConfigSnapshot() in main.cpp). These decide whether the
+    // charge target is honoured at all and whether the charger restarts a
+    // cycle by itself, so they are worth showing rather than hiding behind a
+    // USB cable. 0xFFFF means the charger hasn't answered.
+    {
+        char hexBuf[8];
+        bool sysOk   = (chargerSysConfigRaw   != 0xFFFF);
+        bool curveOk = (chargerCurveConfigRaw != 0xFFFF);
+        snprintf(hexBuf, sizeof(hexBuf), "0x%04X", chargerSysConfigRaw);
+        chg["sysConfigRaw"]   = hexBuf;
+        snprintf(hexBuf, sizeof(hexBuf), "0x%04X", chargerCurveConfigRaw);
+        chg["curveConfigRaw"] = hexBuf;
+        chg["autoRestartOn"]  = sysOk && (chargerSysConfigRaw & NPB_SYS_RSTE);
+        chg["curveCfgStr"]    = curveOk ? ChargerNPB::curveConfigToString(chargerCurveConfigRaw) : String("no reply");
+        chg["curveIsCustom"]  = curveOk
+                                && ((chargerCurveConfigRaw & NPB_CURVE_CUVS_MASK) == NPB_CURVE_CUVS_CUSTOM);
+        chg["restartVbat"]    = serialized(safeFloatStr(chargerRstVbat, 2));
+    }
 
     s_lastFaultActive = dd.chargerBlocked;   // alarm-only faults (low cell voltage) don't stop the charger being switched on
 
@@ -854,6 +876,9 @@ nav button.tab.active{color:var(--accent);}
       <h2>Charge Target</h2>
       <div class="row"><span class="k">Mode</span><span class="v" id="c_chargeMode">--</span></div>
       <div class="row"><span class="k">Active Target</span><span class="v" id="c_activeTarget">--</span></div>
+      <div class="row"><span class="k">Restart At</span><span class="v" id="c_restartAt">--</span></div>
+      <div class="row"><span class="k">Charger Curve</span><span class="v" id="c_curveCfg">--</span></div>
+      <div class="row"><span class="k">Auto-restart (RSTE)</span><span class="v" id="c_autoRestart">--</span></div>
       <div class="hint">Daily mode charges to a partial-SOC target (easier on the cells for everyday use). Full-charge override pushes to the full target once, then automatically drops back to daily mode when it reports fully charged.</div>
       <div class="actionsrow">
         <button id="c_fullChargeBtn" class="secondary">Full-Charge Override: OFF</button>
@@ -1094,6 +1119,17 @@ function applyState(d){
   document.getElementById('c_chargeMode').innerHTML = d.charger.fullChargeOverride
     ? '<span class="pill warn">FULL CHARGE OVERRIDE</span>' : '<span class="pill ok">Daily limit</span>';
   document.getElementById('c_activeTarget').textContent = d.charger.activeTargetV + ' V';
+  document.getElementById('c_restartAt').textContent = d.charger.restartVbat + ' V';
+  // The charger's own config registers. These decide whether the target above
+  // is honoured and whether it restarts a cycle by itself -- a red pill here
+  // means the daily limit isn't actually being enforced by the charger.
+  document.getElementById('c_curveCfg').innerHTML = (d.charger.curveIsCustom
+    ? '<span class="pill ok">'+d.charger.curveCfgStr+'</span>'
+    : '<span class="pill bad">'+d.charger.curveCfgStr+'</span>')
+    + ' <span class="k">'+d.charger.curveConfigRaw+'</span>';
+  document.getElementById('c_autoRestart').innerHTML = d.charger.autoRestartOn
+    ? '<span class="pill ok">enabled</span>'
+    : '<span class="pill warn">off ('+d.charger.sysConfigRaw+')</span>';
   const fcBtn = document.getElementById('c_fullChargeBtn');
   fcBtn.textContent = 'Full-Charge Override: ' + (d.charger.fullChargeOverride ? 'ON' : 'OFF');
   fcBtn.classList.toggle('danger', d.charger.fullChargeOverride);
