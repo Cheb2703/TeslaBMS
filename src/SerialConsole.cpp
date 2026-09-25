@@ -59,6 +59,7 @@ extern bool     chargerReady;       // true once charger.begin() succeeded at bo
 extern float    chargerDailyTargetV;
 extern float    chargerFullTargetV;
 extern bool     chargerFullChargeOverride;
+extern bool     autoTopUpSuspended;      // see main.cpp -- an explicit OFF here suspends the automatic top-up
 extern bool     chargerFullChargeArmed;  // see main.cpp -- cleared whenever the override is toggled here
 extern void     applyChargeTargetVoltage();
 extern float    chargerRestartMaxV();    // highest allowed auto-restart point: daily target less a margin
@@ -701,6 +702,7 @@ void SerialConsole::handleShortCmd() {
             break;
         }
         resumeChargerAfterFault = false; // your explicit command replaces any "resume after fault"
+        autoTopUpSuspended = !newState;  // an explicit OFF sticks until an explicit ON
         desiredChargerOn = newState; // this is what we want going forward -- the
                                       // background mismatch-correction in main.cpp
                                       // loop() will keep enforcing this even if the

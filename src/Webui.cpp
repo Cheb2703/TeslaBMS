@@ -59,6 +59,8 @@ extern float    chargerDailyTargetV;
 extern float    chargerFullTargetV;
 extern bool     chargerFullChargeOverride;
 extern bool     chargerFullChargeArmed;  // see main.cpp -- cleared whenever the override is toggled here
+extern bool     autoTopUpEnabled;        // see main.cpp -- automatic charge when the pack falls to the restart point
+extern bool     autoTopUpSuspended;      // an explicit Output OFF here suspends it until an explicit ON
 extern uint16_t chargerSysConfigRaw;     // charger SYSTEM_CONFIG, cached by loop() -- see main.cpp
 extern uint16_t chargerCurveConfigRaw;   // charger CURVE_CONFIG, cached by loop() -- see main.cpp
 extern void     applyChargeTargetVoltage();
@@ -202,6 +204,8 @@ String WebUIManager::buildStateJson(const DisplayData& dd) {
         chg["curveIsCustom"]  = curveOk
                                 && ((chargerCurveConfigRaw & NPB_CURVE_CUVS_MASK) == NPB_CURVE_CUVS_CUSTOM);
         chg["restartVbat"]    = serialized(safeFloatStr(chargerRstVbat, 2));
+        chg["autoTopUp"]      = autoTopUpEnabled;
+        chg["autoTopUpSuspended"] = autoTopUpSuspended;
     }
 
     s_lastFaultActive = dd.chargerBlocked;   // alarm-only faults (low cell voltage) don't stop the charger being switched on
@@ -242,6 +246,7 @@ String WebUIManager::buildSettingsJson() {
     chg["fvTimeoutMin"] = chargerFVTimeoutMin;
     chg["dailyTargetV"] = serialized(safeFloatStr(chargerDailyTargetV, 2));
     chg["fullTargetV"]  = serialized(safeFloatStr(chargerFullTargetV, 2));
+    chg["autoTopUp"]    = autoTopUpEnabled;
 
     String out;
     serializeJson(doc, out);
@@ -472,6 +477,12 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
         curveChanged = true;
     }
 
+    if (doc["autoTopUp"].is<bool>()) {
+        autoTopUpEnabled = doc["autoTopUp"].as<bool>();
+        autoTopUpSuspended = false; // toggling it is a fresh decision either way
+        preferences.putBool("autoTopUp", autoTopUpEnabled);
+    }
+
     if (doc["restartVbat"].is<float>()) {
         // Clamped against the DAILY target, not the pack ceiling: an
         // auto-restart point at or above the target means the pack is always
@@ -512,6 +523,9 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
             return;
         }
         resumeChargerAfterFault = false; // your explicit command replaces any "resume after fault"
+        // An explicit OFF has to stick: suspend the automatic top-up until an
+        // equally explicit ON (or a re-toggle of the setting) releases it.
+        autoTopUpSuspended = !wantOn;
         desiredChargerOn = wantOn; // keep intent in sync BEFORE commanding, so the
                                    // next poll cycle's mismatch check doesn't see this
                                    // as a rogue state change and "correct" it right back
@@ -880,8 +894,11 @@ nav button.tab.active{color:var(--accent);}
       <div class="row"><span class="k">Charger Curve</span><span class="v" id="c_curveCfg">--</span></div>
       <div class="row"><span class="k">Auto-restart (RSTE)</span><span class="v" id="c_autoRestart">--</span></div>
       <div class="hint">Daily mode charges to a partial-SOC target (easier on the cells for everyday use). Full-charge override pushes to the full target once, then automatically drops back to daily mode when it reports fully charged.</div>
+      <div class="row"><span class="k">Auto Top-Up</span><span class="v" id="c_autoTopUp">--</span></div>
+      <div class="hint">With Auto Top-Up on, the charger is switched on by itself once the pack falls to the Restart At voltage, charges to the daily target, and is switched off again so the pack rests. Switching the output off by hand pauses it until you switch the output back on.</div>
       <div class="actionsrow">
         <button id="c_fullChargeBtn" class="secondary">Full-Charge Override: OFF</button>
+        <button id="c_autoTopUpBtn" class="secondary">Auto Top-Up: OFF</button>
       </div>
     </div>
 
@@ -1130,6 +1147,14 @@ function applyState(d){
   document.getElementById('c_autoRestart').innerHTML = d.charger.autoRestartOn
     ? '<span class="pill ok">enabled</span>'
     : '<span class="pill warn">off ('+d.charger.sysConfigRaw+')</span>';
+  document.getElementById('c_autoTopUp').innerHTML = !d.charger.autoTopUp
+    ? '<span class="pill warn">off</span>'
+    : (d.charger.autoTopUpSuspended
+        ? '<span class="pill warn">paused (output switched off by hand)</span>'
+        : '<span class="pill ok">on</span>');
+  const atBtn = document.getElementById('c_autoTopUpBtn');
+  atBtn.textContent = 'Auto Top-Up: ' + (d.charger.autoTopUp ? 'ON' : 'OFF');
+  atBtn.classList.toggle('danger', d.charger.autoTopUp);
   const fcBtn = document.getElementById('c_fullChargeBtn');
   fcBtn.textContent = 'Full-Charge Override: ' + (d.charger.fullChargeOverride ? 'ON' : 'OFF');
   fcBtn.classList.toggle('danger', d.charger.fullChargeOverride);
@@ -1299,6 +1324,13 @@ document.getElementById('c_fullChargeBtn').addEventListener('click', ()=>{
   const turningOn = !document.getElementById('c_fullChargeBtn').textContent.includes('ON');
   postJson('/api/charger', {fullChargeOverride: turningOn})
     .then(()=> toast(turningOn ? 'Full-charge override ON' : 'Full-charge override OFF -- back to daily limit', 'ok'))
+    .catch(e=> toast(e.message,'err'));
+});
+
+document.getElementById('c_autoTopUpBtn').addEventListener('click', ()=>{
+  const turningOn = !document.getElementById('c_autoTopUpBtn').textContent.endsWith('ON');
+  postJson('/api/charger', {autoTopUp: turningOn})
+    .then(()=> toast(turningOn ? 'Auto top-up ON' : 'Auto top-up OFF', 'ok'))
     .catch(e=> toast(e.message,'err'));
 });
 

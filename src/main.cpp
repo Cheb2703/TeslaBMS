@@ -168,6 +168,27 @@ bool  chargerFullChargeOverride = false;  // true = charging toward chargerFullT
 // real cycle again.
 bool  chargerFullChargeArmed    = false;
 
+// Automatic top-up. The charger's own restart-when-low feature (SYSTEM_CONFIG's
+// RSTE bit) is documented for the NPB/NPP series but this NPB-750 will not hold
+// the bit -- it accepts the write and ignores it. So the top-up is done here
+// instead, which is both possible (loop() already knows the pack voltage, the
+// restart point and how to command the output) and better: at the end of a
+// charge the output is switched OFF, so the pack rests instead of being floated
+// at the charge target for weeks the way RSTE would have left it.
+//
+// Off by default, and off until the owner turns it on: with it on, a low pack
+// starts charging with nobody present, which is a deliberate choice and not a
+// sensible default. It is also the one thing that overrides "after a reboot the
+// charger always starts OFF" -- when it is on, a reboot with a low pack will
+// start a top-up, because that is the whole point of it.
+bool autoTopUpEnabled = false;
+
+// Set when the owner switches the output OFF by hand while the top-up is
+// enabled, so their OFF sticks instead of being undone at the next threshold
+// crossing. Cleared by an explicit ON, or by toggling the top-up setting.
+// Not persisted: a reboot is a clean slate.
+bool autoTopUpSuspended = false;
+
 unsigned long rebootTime = 0;
 int packsConfigured;
 String systemName = "esp32-teslabms";
@@ -724,6 +745,7 @@ void setup()
     chargerDailyTargetV       = preferences.getFloat("chgDailyV", chargerDailyTargetV);
     chargerFullTargetV        = preferences.getFloat("chgFullV",  chargerFullTargetV);
     chargerFullChargeOverride = preferences.getBool("chgFullOvr", chargerFullChargeOverride);
+    autoTopUpEnabled          = preferences.getBool("autoTopUp",  autoTopUpEnabled);
 
     preferences.end();
 
@@ -1195,6 +1217,35 @@ void loop()
                 }
             }
             wasBlocked = dd.chargerBlocked;
+        }
+
+        // Automatic top-up (see the autoTopUpEnabled comment above). Start when
+        // the pack has fallen to the restart point, stop when the charger says
+        // it is full -- a wide hysteresis (23.1 V up to 24.0 V on this pack),
+        // so there is no chance of it chattering on and off.
+        //
+        // Deliberately does nothing at all unless the owner switched it on, and
+        // never while a charging-blocking fault is active: the interlock above
+        // has already commanded the output off and must win.
+        if (autoTopUpEnabled && !autoTopUpSuspended && chargerReady && !dd.chargerBlocked) {
+            const ChargerData& cd = charger.data();
+            if (cd.online) {
+                bool chargerSaysFull = (cd.chgStatus & NPB_CHG_FULLM) != 0;
+                if (!desiredChargerOn && !chargerSaysFull && dd.packVoltage <= chargerRstVbat) {
+                    desiredChargerOn = true;
+                    resumeChargerAfterFault = false; // this IS the decision now
+                    Logger::info("Auto top-up: pack %fV is at or below the %fV restart point -- charging to %fV",
+                                 dd.packVoltage, chargerRstVbat, chargerCurveCV);
+                    if (!charger.setOutput(true))
+                        Logger::error("Auto top-up: charger ON command failed -- charger not responding, will retry");
+                } else if (desiredChargerOn && chargerSaysFull) {
+                    desiredChargerOn = false;
+                    Logger::info("Auto top-up: charger reports full -- output off, the pack now rests until it falls to %fV",
+                                 chargerRstVbat);
+                    if (!charger.setOutput(false))
+                        Logger::error("Auto top-up: charger OFF command failed -- charger not responding, will retry");
+                }
+            }
         }
 
         dd.hasFaultHistory          = hasFaultHistory;
