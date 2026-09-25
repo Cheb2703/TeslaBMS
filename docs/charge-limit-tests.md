@@ -210,20 +210,20 @@ Run remotely over the HTTP API against the real pack (2 modules, 21.3 V, 51 % So
 Also confirmed: `FV == CV` is accepted by this charger (`read-back OK: CV=21.500 FV=21.500`),
 which had been an open risk — a rejection there would have switched the charger off.
 
-### Open item: RSTE will not set
+### Closed: RSTE is not implemented on this charger
 
-`configureChargerAutoRestart()` sends the read-modify-write at boot, but `SYSTEM_CONFIG`
-still reads `0x0001` afterwards — bit 3 never sticks, so the charger will not restart a
-cycle on its own and the pack will sit at the daily target until someone presses
-**Output ON**. Nothing else is affected.
+`SYSTEM_CONFIG` bit 3 is RSTE, confirmed on page 53 of the NPB/NPP CAN manual, and the
+NPB-750 spec lists both `SYSTEM_CONFIG` and `CHG_RST_VBAT` as R/W. But the charger
+accepts the write frame and silently ignores the bit: `wrote SYSTEM_CONFIG 0x9 but it
+still reads 0x1`, five attempts, with the charger online and answering everything else.
+The manual's own per-series support row for that register reads mostly `NO`, so RSTE is
+documented for the series and not implemented on this model.
 
-Three things to try, in order:
+The firmware now retries the write every 10 s (up to 5 times) instead of only once at
+boot -- that part was a real bug, since the charger's AC comes on independently and is
+often absent when the board boots. It gives up with a clear log line rather than
+pretending it worked.
 
-1. **AC power-cycle the charger**, then reload the Charging tab. The manual says
-   SYSTEM_CONFIG only takes effect at AC power-up; it may also only read back then.
-2. **Check bit 3 really is RSTE** for this model. The `CURVE_CONFIG` table in the same
-   manual was transcribed wrong here (an earlier decode called a demonstrably working
-   charger "curve disabled"), so the SYSTEM_CONFIG table deserves the same suspicion.
-3. **Try the write by hand** with USB attached: `CHGRAWR=0xC2` to read, `CHGRAWW=0xC2,0x0009`
-   to write, `CHGRAWR=0xC2` to read back. If it still reads `0x0001`, the charger is
-   refusing the write and the bit position or the write method is wrong.
+**Consequence:** the charger will not resume charging on its own. Automatic top-ups have
+to be done by the firmware instead -- see the pack-voltage trigger discussion; the
+ESP32 already knows the pack voltage and the threshold and can command the output.

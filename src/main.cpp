@@ -403,30 +403,59 @@ void refreshChargerConfigSnapshot() {
 // CHGOPINIT), and only when it is actually missing, so the charger's EEPROM
 // is written once rather than on every boot. Blocking CAN reads: setup()
 // only, never a request handler.
-void configureChargerAutoRestart() {
+// How many times to try before giving up, so a charger that simply refuses the
+// bit doesn't get its EEPROM written on a loop forever.
+#define CHARGER_RSTE_MAX_ATTEMPTS 5
+uint8_t chargerRsteAttempts = 0;
+bool    chargerRsteDone     = false;
+
+void tryEnableChargerAutoRestart() {
 #if CHARGER_ENABLE_AUTO_RESTART
-    uint16_t sysCfg;
-    if (!charger.readRaw(NPB_SYSTEM_CONFIG, sysCfg)) {
-        Logger::error("Charger auto-restart: could not read SYSTEM_CONFIG -- charger not responding");
+    if (chargerRsteDone || !chargerReady) return;
+    // Nothing to write to yet. This is the important part: the charger's AC is
+    // switched on independently of the ESP32, so it is perfectly normal for it
+    // to be absent at boot and appear later. Doing this once in setup() meant
+    // that in the ordinary case -- board already running, charger plugged in
+    // afterwards -- RSTE was never set at all.
+    if (!charger.data().online) return;
+    if (chargerRsteAttempts >= CHARGER_RSTE_MAX_ATTEMPTS) return;
+
+    uint16_t before;
+    if (!charger.readRaw(NPB_SYSTEM_CONFIG, before)) {
+        Logger::warn("Charger auto-restart: no reply reading SYSTEM_CONFIG, will try again");
         return;
     }
-    chargerSysConfigRaw = sysCfg;
-    if (sysCfg & NPB_SYS_RSTE) {
-        Serial.printf("Charger auto-restart: already enabled (SYSTEM_CONFIG=0x%04X), restart point %.2f V\r\n",
-                      sysCfg, chargerRstVbat);
+    chargerSysConfigRaw = before;
+    if (before & NPB_SYS_RSTE) {
+        chargerRsteDone = true;
+        Logger::info("Charger auto-restart (RSTE) is on; the charger will resume charging by itself below %fV", chargerRstVbat);
         return;
     }
-    uint16_t newCfg = (uint16_t)(sysCfg | NPB_SYS_RSTE);
-    if (charger.writeRaw(NPB_SYSTEM_CONFIG, newCfg)) {
-        chargerSysConfigRaw = newCfg;
-        Serial.printf("Charger auto-restart: RSTE enabled (SYSTEM_CONFIG 0x%04X -> 0x%04X), restart point %.2f V. "
-                      "SYSTEM_CONFIG changes take effect on the charger's NEXT AC power-up.\r\n",
-                      sysCfg, newCfg, chargerRstVbat);
+
+    chargerRsteAttempts++;
+    uint16_t want = (uint16_t)(before | NPB_SYS_RSTE);
+    if (!charger.writeRaw(NPB_SYSTEM_CONFIG, want)) {
+        Logger::error("Charger auto-restart: SYSTEM_CONFIG write could not be sent (try %d of %d)",
+                      (int)chargerRsteAttempts, CHARGER_RSTE_MAX_ATTEMPTS);
+        return;
+    }
+    // Read it straight back. Only the read-back decides whether it worked --
+    // writeRaw() only confirms the frame went out on the bus.
+    uint16_t after;
+    if (!charger.readRaw(NPB_SYSTEM_CONFIG, after)) {
+        Logger::warn("Charger auto-restart: wrote SYSTEM_CONFIG but got no read-back, will check again");
+        return;
+    }
+    chargerSysConfigRaw = after;
+    if (after & NPB_SYS_RSTE) {
+        chargerRsteDone = true;
+        Logger::info("Charger auto-restart: RSTE enabled, SYSTEM_CONFIG %X -> %X, restart point %fV", before, after, chargerRstVbat);
     } else {
-        Logger::error("Charger auto-restart: RSTE write failed -- charger not responding");
+        Logger::error("Charger auto-restart: wrote SYSTEM_CONFIG %X but it still reads %X -- this charger is refusing RSTE (try %d of %d)",
+                      want, after, (int)chargerRsteAttempts, CHARGER_RSTE_MAX_ATTEMPTS);
+        if (chargerRsteAttempts >= CHARGER_RSTE_MAX_ATTEMPTS)
+            Logger::error("Charger auto-restart: giving up. Bit 3 of SYSTEM_CONFIG is RSTE per the NPB/NPP manual, but this unit will not hold it -- top-ups have to be started by hand.");
     }
-#else
-    Serial.println("Charger auto-restart: disabled in config.h (CHARGER_ENABLE_AUTO_RESTART 0) -- the charger only charges when switched on by hand.");
 #endif
 }
 
@@ -796,7 +825,7 @@ void setup()
         // cannot set through the normal curve registers: whether the charger
         // restarts a cycle on its own (RSTE, enabled here), and whether it
         // honours our curve values at all (CURVE_CONFIG, reported here).
-        configureChargerAutoRestart();
+        tryEnableChargerAutoRestart();
         checkChargerCurveConfig();
     } else {
         Serial.println("Charger CAN failed to start -- continuing without charger.");
@@ -1302,6 +1331,9 @@ void loop()
         // plenty -- and it means a CHGCURVESEL or an AC power-cycle shows up
         // on the Charging tab without needing a USB cable.
         refreshChargerConfigSnapshot();
+        // Retried here, not just at boot: the charger's AC comes on
+        // independently of this board, so it may only appear minutes later.
+        tryEnableChargerAutoRestart();
 
         // Re-scan for missing modules. Renumbering resets EVERY board on the ring,
         // so don't do it every 10 s forever: back off (10 s, 20 s, 40 s, then
