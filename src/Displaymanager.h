@@ -174,7 +174,7 @@ public:
 // The ETA math is intentionally simple (linear extrapolation from SoC gap
 // and present current draw) and will be optimistic during the CV/float
 // taper, where current drops well before the pack is actually full.
-#define PACK_CAPACITY_AH 238.0f
+#define PACK_CAPACITY_AH 464.0f   // two 5.3 kWh Model S modules (~232 Ah each) in parallel
 
 // ── Data struct the display consumes ────────────────────────────────────────
 struct DisplayData {
@@ -295,5 +295,6 @@ private:
     uint16_t deltaColor(int deltaMv);
 };
 
-// ── SoC estimation (OCV lookup, NMC curve) ───────────────────────────────────
-uint8_t estimateSoC(float avgCellVoltage);
+// ── SoC estimation (OCV lookup, NCA curve -- see Displaymanager.cpp) ──────────
+float   socFractionFromOcv(float avgCellVoltage);   // 0.0-1.0
+uint8_t estimateSoC(float avgCellVoltage);          // 0-100 %

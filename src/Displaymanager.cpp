@@ -2,32 +2,38 @@
 #include "Chargernpb.h" // NPB_CHG_*/NPB_FAULT_* bit macros for decoding the charging page
 #include "Logger.h"     // Logger::info() for the display watchdog reinit log line
 
-// ── OCV → SoC lookup table (Panasonic NCR18650B, 11 breakpoints) ────────────
-// Rescaled at the top end (3.85V and up) so that 4.00V/cell -- the charger's
-// daily-limit target (see CHARGER_INIT_DAILY_V in main.cpp) -- reads 80%, and
-// 4.15V/cell -- the full-charge override target -- reads 100%. This matches
-// how the pack is actually being managed (Tesla-style ~80% daily / 100% only
-// on override) rather than raw cell-physics OCV, which would show 4.00V as
-// ~92%. Below 3.70V is left as true OCV -- it doesn't affect the daily/full
-// decision and matters more for low-charge warnings, so no reason to distort it.
-static const float OCV_VOLT[] = { 3.00f, 3.10f, 3.20f, 3.30f, 3.40f,
-                                   3.50f, 3.60f, 3.70f, 3.85f, 4.00f, 4.15f };
-static const uint8_t OCV_SOC[] = { 0,   3,   7,  12,  28,
-                                    42,  55,  68,  74,  80, 100 };
-static const int OCV_POINTS = 11;
+// ── OCV → SoC lookup table ───────────────────────────────────────────────────
+// Typical rested open-circuit voltage of the NCA cells in Tesla Model S modules
+// (Panasonic 18650), room temperature, per cell. One table for everything: the
+// LCD/web charge level, and Packhealth's capacity estimate. With it, the 4.00 V
+// daily target reads 80% (as Tesla's daily limit does) and the 4.15 V full-charge
+// target reads 96%; 4.20 V is 100%. (The table used until 2026-09-28 was
+// stretched so 4.15 V read 100%, and read the middle far too high: 3.58 V showed
+// ~52%, where Tesla's figures put it near 25%. Owner chose accuracy.)
+// Voltage only means much at rest -- while charging or under the lift's load the
+// reading is off by the cells' resistance.
+static const float OCV_VOLT[] = { 3.30f, 3.40f, 3.50f, 3.55f, 3.60f, 3.65f, 3.70f, 3.75f, 3.80f,
+                                  3.85f, 3.90f, 3.95f, 4.00f, 4.05f, 4.10f, 4.15f, 4.20f };
+static const float OCV_SOC[]  = { 0.00f, 0.05f, 0.13f, 0.19f, 0.27f, 0.34f, 0.41f, 0.48f, 0.55f,
+                                  0.62f, 0.68f, 0.74f, 0.80f, 0.86f, 0.91f, 0.96f, 1.00f };
+static const int OCV_POINTS = sizeof(OCV_VOLT) / sizeof(OCV_VOLT[0]);
 
-uint8_t estimateSoC(float v) {
+float socFractionFromOcv(float v) {
     // "!(v > x)" instead of "v <= x" so a NaN also returns 0. NaN fails every
     // comparison and used to fall through to the final "return 100".
-    if (!(v > OCV_VOLT[0]))            return 0;
-    if (v >= OCV_VOLT[OCV_POINTS - 1]) return 100;
+    if (!(v > OCV_VOLT[0]))            return 0.0f;
+    if (v >= OCV_VOLT[OCV_POINTS - 1]) return 1.0f;
     for (int i = 1; i < OCV_POINTS; i++) {
         if (v <= OCV_VOLT[i]) {
             float t = (v - OCV_VOLT[i-1]) / (OCV_VOLT[i] - OCV_VOLT[i-1]);
-            return (uint8_t)(OCV_SOC[i-1] + t * (OCV_SOC[i] - OCV_SOC[i-1]));
+            return OCV_SOC[i-1] + t * (OCV_SOC[i] - OCV_SOC[i-1]);
         }
     }
-    return 100;
+    return 1.0f;
+}
+
+uint8_t estimateSoC(float v) {
+    return (uint8_t)(socFractionFromOcv(v) * 100.0f + 0.5f);
 }
 
 // Formats a duration in seconds as "Ns", "MmSs", or "HhMm" depending on

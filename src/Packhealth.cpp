@@ -56,24 +56,11 @@ int      s_wireN = 0;
 uint32_t s_lastTickMs = 0;
 uint32_t s_lastPendingSaveMs = 0;
 
-// Typical rested open-circuit voltage of an NCA cell (the Panasonic 18650s in
-// Tesla Model S modules) against state of charge, room temperature. Approximate:
-// published curves differ by a few percent, which is why only big charges are
-// used and the median of several estimates is shown.
-const float OCV_V[]   = { 3.30f, 3.40f, 3.50f, 3.55f, 3.60f, 3.65f, 3.70f, 3.75f, 3.80f,
-                          3.85f, 3.90f, 3.95f, 4.00f, 4.05f, 4.10f, 4.15f, 4.20f };
-const float OCV_SOC[] = { 0.00f, 0.05f, 0.13f, 0.19f, 0.27f, 0.34f, 0.41f, 0.48f, 0.55f,
-                          0.62f, 0.68f, 0.74f, 0.80f, 0.86f, 0.91f, 0.96f, 1.00f };
-const int   OCV_N = sizeof(OCV_V) / sizeof(OCV_V[0]);
-
-float ocvSoc(float v) {
-    if (!(v > OCV_V[0])) return 0.0f;
-    if (v >= OCV_V[OCV_N - 1]) return 1.0f;
-    for (int i = 1; i < OCV_N; i++)
-        if (v <= OCV_V[i])
-            return OCV_SOC[i - 1] + (v - OCV_V[i - 1]) / (OCV_V[i] - OCV_V[i - 1]) * (OCV_SOC[i] - OCV_SOC[i - 1]);
-    return 1.0f;
-}
+// Charge level from rested voltage: the same NCA table the display uses
+// (socFractionFromOcv() in Displaymanager.cpp). Approximate -- published curves
+// differ by a few percent, which is why only big charges are used and the
+// median of several estimates is shown.
+float ocvSoc(float v) { return socFractionFromOcv(v); }
 
 float median(const float* src, int n) {
     float v[HIST];
