@@ -220,7 +220,7 @@ void Packhealth::poll(const DisplayData& dd, int chargeEvent, bool chargerOnline
         if (chargerOn) {
             s_waitingActive = false;
             clearPending();
-            Blackbox::log("CAP", "No capacity estimate: charging started again before a rested reading");
+            Blackbox::log("CAP", "No capacity estimate: the charger was running at power-on, or started before a rested reading");
         } else if (Celldrift::restedMeanV(after)) {
             finishCapacity(after);
         } else if (now > DRIFT_SNAPSHOT_WINDOW_MS + 5000) {
