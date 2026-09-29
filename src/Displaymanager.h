@@ -189,6 +189,7 @@ struct DisplayData {
     int     goodPackets;
     int     badPackets;
     int     balancingCount;
+    bool    balancePaused;    // balancing decisions on hold: pack voltage not steady (lift running, charger just switched)
     bool    isFaulted;
     bool    chargerBlocked;   // true if any active fault holds the charger off (isFaulted also counts alarm-only faults)
 

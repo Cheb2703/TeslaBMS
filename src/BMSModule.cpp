@@ -547,7 +547,7 @@ void BMSModule::balanceCells(float lowestCell)
     {
         payload[0] = moduleAddress << 1;
         payload[1] = REG_BAL_TIME;
-        payload[2] = 0x82; // Balance for two minutes
+        payload[2] = BALANCE_TIMER_REG; // up to 63 minutes -- see config.h (keeps going after the ESP32 powers off)
         BMSUtil::sendData(payload, 3, true);
         delay(2);
         BMSUtil::getReply(buff, 30);

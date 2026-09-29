@@ -33,6 +33,7 @@ BMSModuleManager::BMSModuleManager()
         faultList[i].reason[0] = '\0';
         faultList[i].startMillis = 0;
         faultList[i].blocksCharger = true;
+        faultList[i].silent = false;
     }
     memset(commFails, 0, sizeof(commFails));
 }
@@ -148,6 +149,7 @@ void BMSModuleManager::findBoards()
     uint8_t buff[8];
 
     numFoundModules = 0;
+    boardsBalanceTimerRunning = 0;
     payload[0] = 0;
     payload[1] = 0; // read registers starting at 0
     payload[2] = 1; // read one byte
@@ -170,6 +172,7 @@ void BMSModuleManager::findBoards()
                 modules[x].setExists(true);
                 numFoundModules++;
                 lastGood = x;
+                if (buff[3] & 0x02) boardsBalanceTimerRunning++;   // register 0 is DEVICE_STATUS; bit 1 = CBT
                 Logger::debug("Found module with address: %X", x);
             }
             else
@@ -822,7 +825,7 @@ void BMSModuleManager::buildDisplayData(DisplayData& out) {
 // already active, only the reason text is refreshed (e.g. an updated
 // voltage reading) -- the original startMillis is preserved so duration
 // tracking is continuous across polls rather than resetting every 3 seconds.
-void BMSModuleManager::reportFault(const char* id, const char* reason, bool blocksCharger) {
+void BMSModuleManager::reportFault(const char* id, const char* reason, bool blocksCharger, bool silent) {
     for (int i = 0; i < MAX_ACTIVE_FAULTS; i++) {
         if (faultList[i].active && strcmp(faultList[i].id, id) == 0) {
             strncpy(faultList[i].reason, reason, sizeof(faultList[i].reason) - 1);
@@ -844,7 +847,8 @@ void BMSModuleManager::reportFault(const char* id, const char* reason, bool bloc
             faultList[i].reason[sizeof(faultList[i].reason) - 1] = '\0';
             faultList[i].startMillis = millis();
             faultList[i].blocksCharger = blocksCharger;
-            Blackbox::faultRaised(id, reason, blocksCharger);
+            faultList[i].silent = silent;
+            Blackbox::faultRaised(id, reason, blocksCharger, silent);
             return;
         }
     }
@@ -867,6 +871,14 @@ int BMSModuleManager::getBlockingFaultCount() {
     int count = 0;
     for (int i = 0; i < MAX_ACTIVE_FAULTS; i++) {
         if (faultList[i].active && faultList[i].blocksCharger) count++;
+    }
+    return count;
+}
+
+int BMSModuleManager::getAudibleFaultCount() {
+    int count = 0;
+    for (int i = 0; i < MAX_ACTIVE_FAULTS; i++) {
+        if (faultList[i].active && !faultList[i].silent) count++;
     }
     return count;
 }

@@ -91,6 +91,40 @@
 // target, in CV it sits at it) but well under the per-cell limit.
 #define CHARGE_TARGET_OVERSHOOT_V 0.50f
 
+// -- Cell balancing ------------------------------------------------------------
+// Balancing decisions are only made on steady readings: the pack voltage may
+// move at most BALANCE_STEADY_MAX_V over the last BALANCE_STEADY_READINGS
+// 3-second polls (30 s). The lift motor's heavy current sags cells unevenly,
+// and balancing on those readings would bleed the wrong cells. While the pack
+// isn't steady the boards keep whatever was last decided on a steady reading.
+#define BALANCE_STEADY_READINGS   10
+#define BALANCE_STEADY_MAX_V      0.030f
+
+// The boards' own balance timer (BQ76PL536A CB_TIME, 0x33): bit 7 = minutes,
+// bits 5-0 = time, 63 at most. Every command restarts it, so while the ESP32
+// runs it never expires; once the ESP32 is powered off, each board keeps
+// bleeding the cells it was last told to for up to 63 minutes and then stops
+// by itself. That hour after the lift is switched off is balancing at rest,
+// the way Tesla balances a parked car.
+#define BALANCE_TIMER_REG         0xBF
+
+// -- Cell drift (self-discharge) warning ----------------------------------------
+// Once per power-on, on the first steady reading with the charger off, each
+// cell's offset from the average of all cells is saved (the last DRIFT_HISTORY
+// power-ons are kept). A cell with a small internal short slowly drains itself
+// and falls behind the others -- an early warning of a failing, possibly
+// dangerous cell. A cell that has fallen DRIFT_WARN_MV below its usual offset
+// raises a screen-only warning (no buzzer, charging allowed). Only earlier
+// readings at a similar charge level (average cell voltage within
+// DRIFT_COMPARE_V) count, because cells of slightly different capacity sit at
+// different offsets at different charge levels; and a cell that was balanced
+// in between is not judged, since balancing lowers it on purpose.
+#define DRIFT_HISTORY             12
+#define DRIFT_MIN_SAMPLES         3
+#define DRIFT_COMPARE_V           0.050f
+#define DRIFT_WARN_MV             10.0f
+#define DRIFT_SNAPSHOT_WINDOW_MS  (10UL * 60UL * 1000UL)   // give up on this power-on's reading after this long
+
 //extern HardwareSerial Serial1; // Leftover from back in the day when this ran on arduino
 
 //Set to the proper port for your USB connection - SerialUSB on Due (Native) or Serial for Due (Programming) or Teensy

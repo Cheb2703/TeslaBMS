@@ -62,6 +62,7 @@ bool     s_chgCandidate = false;   // the live state differs from the settled on
 uint32_t s_chgCandidateSinceMs = 0;//   ...since this time
 float    s_chgCandidateV = 0.0f;
 char     s_chgCandidateReason[40] = "";
+float    s_chgCandidateSpreadMv = 0.0f;
 uint32_t s_chgStartMs = 0;
 float    s_chgStartV = 0.0f;
 float    s_chgAh = 0.0f;
@@ -286,7 +287,7 @@ void Blackbox::loop() {
     if (f) f.close();
 }
 
-void Blackbox::faultRaised(const char* id, const char* reason, bool blocksCharger) {
+void Blackbox::faultRaised(const char* id, const char* reason, bool blocksCharger, bool silent) {
     for (int i = 0; i < PENDING_LEN; i++) {
         PendingClear& p = s_pending[i];
         if (p.used && strcmp(p.id, id) == 0) {
@@ -294,7 +295,8 @@ void Blackbox::faultRaised(const char* id, const char* reason, bool blocksCharge
             return;   // the same event, back again -- no new line
         }
     }
-    log("FAULT", "%s%s", reason, blocksCharger ? "" : " (alarm only, charging allowed)");
+    log(silent ? "WARN" : "FAULT", "%s%s", reason,
+        silent ? " (warning, no buzzer)" : blocksCharger ? "" : " (alarm only, charging allowed)");
 }
 
 void Blackbox::faultCleared(const char* id, const char* reason, uint32_t startMillis) {
@@ -326,7 +328,7 @@ void Blackbox::faultCleared(const char* id, const char* reason, uint32_t startMi
     log("CLEAR", "%s -- lasted %s", reason, dur);
 }
 
-void Blackbox::chargerTick(bool outputOn, float amps, float packVolts, const char* offReason) {
+void Blackbox::chargerTick(bool outputOn, float amps, float packVolts, float cellSpreadMv, const char* offReason) {
     uint32_t now = millis();
     if (s_lastTickMs == 0) s_lastTickMs = now;
     uint32_t dt = now - s_lastTickMs;
@@ -344,6 +346,7 @@ void Blackbox::chargerTick(bool outputOn, float amps, float packVolts, const cha
         s_chgCandidate = true;
         s_chgCandidateSinceMs = now;
         s_chgCandidateV = packVolts;
+        s_chgCandidateSpreadMv = cellSpreadMv;
         strncpy(s_chgCandidateReason, offReason ? offReason : "", sizeof(s_chgCandidateReason) - 1);
         s_chgCandidateReason[sizeof(s_chgCandidateReason) - 1] = '\0';
     }
@@ -359,8 +362,8 @@ void Blackbox::chargerTick(bool outputOn, float amps, float packVolts, const cha
     } else {
         char dur[16];
         fmtDuration(dur, sizeof(dur), (s_chgCandidateSinceMs - s_chgStartMs) / 1000);
-        log("CHG_OFF", "Charging stopped (%s) after %s: %.2f V -> %.2f V, %.1f Ah in",
-            s_chgCandidateReason, dur, s_chgStartV, s_chgCandidateV, s_chgAh);
+        log("CHG_OFF", "Charging stopped (%s) after %s: %.2f V -> %.2f V, %.1f Ah in, cell spread %.0f mV",
+            s_chgCandidateReason, dur, s_chgStartV, s_chgCandidateV, s_chgAh, s_chgCandidateSpreadMv);
     }
     writeCheckpoint();
 }

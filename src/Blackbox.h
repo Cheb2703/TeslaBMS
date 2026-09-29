@@ -45,14 +45,16 @@ namespace Blackbox {
     void log(const char* type, const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 
     // Fault registry hooks (BMSModuleManager::reportFault/clearFaultById).
-    void faultRaised(const char* id, const char* reason, bool blocksCharger);
+    void faultRaised(const char* id, const char* reason, bool blocksCharger, bool silent);
     void faultCleared(const char* id, const char* reason, uint32_t startMillis);
 
     // Called once a second with the charger's actual output state. Logs a
     // CHG_ON / CHG_OFF pair per charge session with its duration, pack voltage
     // before and after, and the amp-hours the charger reported putting in.
-    // offReason is only used on the ON -> OFF edge.
-    void chargerTick(bool outputOn, float amps, float packVolts, const char* offReason);
+    // offReason and cellSpreadMv are only used on the ON -> OFF edge: the spread
+    // at the top of a charge shows whether mid-charge balancing (which the pack
+    // mostly gets) is leaving the cells apart where it matters.
+    void chargerTick(bool outputOn, float amps, float packVolts, float cellSpreadMv, const char* offReason);
 
     // Say why the next restart happens, just before calling esp_restart(), so
     // the boot line can tell a Reboot button from a firmware update. Kept in

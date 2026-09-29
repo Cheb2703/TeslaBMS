@@ -13,6 +13,7 @@
 #include "Chargernpb.h"
 #include "Webui.h"
 #include "Blackbox.h"
+#include "Celldrift.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
@@ -124,7 +125,7 @@ SerialConsole console;
 uint32_t lastUpdate1;
 uint32_t lastUpdate2;
 uint32_t lastUpdate3;
-float balanceVoltage = 3.95f;
+float balanceVoltage = 3.50f;   // balance any cell above this that sits above the lowest (was 3.95 V: top-only)
 float balanceHyst = 0.007f;
 
 // -- Charger setpoints -- persisted the same way as balanceVoltage/balanceHyst
@@ -215,6 +216,28 @@ String webPassword = SECRET_WEBUI_PASS;
 bool wifiReconnectPending = false;
 DisplayManager displayManager;  // Single global display instance
 bool buzzerAlarmActive = false;   // whether the buzzer should be sounding (worked out once a second)
+
+// Is the pack voltage steady enough to balance on (and, once per power-on, to
+// count as a rested reading for the cell-drift check)? Worked out in the
+// 3-second block from the last BALANCE_STEADY_READINGS pack voltages.
+//   0 = not enough readings yet this power-on, 1 = steady, 2 = moving
+int packSteadyState = 0;
+
+void updatePackSteadiness(float packV) {
+    static float history[BALANCE_STEADY_READINGS];
+    static int   count = 0, next = 0;
+    // A failed read (0 V or NaN) counts as moving, so a flaky ring can't look steady.
+    history[next] = (packV > 1.0f) ? packV : -100.0f;
+    next = (next + 1) % BALANCE_STEADY_READINGS;
+    if (count < BALANCE_STEADY_READINGS) count++;
+    if (count < BALANCE_STEADY_READINGS) { packSteadyState = 0; return; }
+    float lo = history[0], hi = history[0];
+    for (int i = 1; i < BALANCE_STEADY_READINGS; i++) {
+        if (history[i] < lo) lo = history[i];
+        if (history[i] > hi) hi = history[i];
+    }
+    packSteadyState = (hi - lo <= BALANCE_STEADY_MAX_V) ? 1 : 2;
+}
 bool chargeBlockedState = false;  // a fault that holds the charger off is active (alarm-only faults, like low cell voltage, don't count)
 bool lastHwFaultState = false;   // tracks BMB_FAULT_PIN state for edge-triggered logging
 bool chargerReady = false;       // true once charger.begin() succeeds at boot -- gates the charging page
@@ -555,7 +578,7 @@ void loadSettings()
     settings.UnderVSetpoint = 3.30f;
     settings.OverTSetpoint = 65.0f;
     settings.UnderTSetpoint = -10.0f;
-    settings.balanceVoltage = 3.95f;
+    settings.balanceVoltage = 3.50f;
     settings.balanceHyst = 0.007f;
     settings.logLevel = 1;
     Logger::setLoglevel((Logger::LogLevel)settings.logLevel);
@@ -583,7 +606,7 @@ void setup()
     apSSID = preferences.getString("apSSID", apSSID);
     apPassword = preferences.getString("apPassword", apPassword);
     mdnsHostname = preferences.getString("mdnsHostname", mdnsHostname);
-    balanceVoltage = preferences.getFloat("balanceVoltage", 3.95f);
+    balanceVoltage = preferences.getFloat("balanceVoltage", 3.50f);
     balanceHyst = preferences.getFloat("balanceHyst", 0.007f);
     packsConfigured = preferences.getInt("packsConfigured", DEFAULT_PACKS_CONFIGURED);
     webUsername = preferences.getString("webUsername", webUsername);
@@ -604,6 +627,7 @@ void setup()
     // boot line and the reason for this start are recorded even if something
     // later in setup() hangs.
     Blackbox::begin();
+    Celldrift::begin();
 
     // The AP is the primary interface -- this device spends nearly all its
     // life off any home network, controlled entirely over its own AP. It
@@ -865,6 +889,11 @@ void setup()
     Serial.println("Finding BMS Boards...");
     bms.findBoards();
     Serial.println("Done.");
+    // Read before renumberBoardIDs() resets every board (which stops any
+    // balancing): boards still balancing now carried on after the last power-off.
+    if (bms.getBoardsBalanceTimerRunning() > 0)
+        Blackbox::log("BAL", "Balance timer still running on %d of %d boards at power-on: they kept balancing after the last power-off",
+                      bms.getBoardsBalanceTimerRunning(), numFoundModules);
     Serial.println("Renumbering board IDs...");
     bms.renumberBoardIDs();
 
@@ -1135,8 +1164,9 @@ void loop()
         // running: once charging is under way the pack is being recovered, so
         // stay quiet, and sound again if charging stops with the pack still low.
         {
+            // Warnings (e.g. cell drift) never sound it -- they are screen-only.
             bool chargerRunning = dd.chargerPresent && dd.chargerOnline && dd.chargerOutputOn;
-            buzzerAlarmActive = dd.chargerBlocked || (dd.isFaulted && !chargerRunning);
+            buzzerAlarmActive = dd.chargerBlocked || (bms.getAudibleFaultCount() > 0 && !chargerRunning);
         }
 
         // Charger safety interlock -- keep the charger's output OFF for the
@@ -1262,8 +1292,12 @@ void loop()
                             : (cd.chgStatus & NPB_CHG_FULLM)    ? "charger reports full"
                             : !desiredChargerOn                 ? "switched off"
                             :                                     "charger stopped by itself";
-            Blackbox::chargerTick(on, on ? cd.iout : 0.0f, dd.packVoltage, why);
+            Blackbox::chargerTick(on, on ? cd.iout : 0.0f, dd.packVoltage, (dd.cellHigh - dd.cellLow) * 1000.0f, why);
+
+            // Cell drift: once per power-on, a rested reading (steady, charger off).
+            Celldrift::poll(dd, packsConfigured, packSteadyState, on, bms);
         }
+        dd.balancePaused = (packSteadyState != 1);
 
         dd.hasFaultHistory          = hasFaultHistory;
         dd.lastFaultDurationMs      = lastFaultDurationMs;
@@ -1315,20 +1349,17 @@ void loop()
     if (millis() - lastUpdate1 >= 3000) {
         lastUpdate1 = millis();
 
-        if (WiFi.status() == WL_CONNECTED) {
-            flashBlue(3);
+        if (WiFi.status() == WL_CONNECTED) flashBlue(3);
 
-            bms.getAllVoltTemp();
+        bms.getAllVoltTemp();
+        updatePackSteadiness(bms.getPackVoltage());
+        // Balance only on steady readings -- not while the lift motor is pulling
+        // the cells down unevenly. Meanwhile the boards keep the last decision
+        // (their own timer runs up to 63 min, see BALANCE_TIMER_REG).
+        if (packSteadyState == 1)
             bms.balanceCells(false); // getAllVoltTemp() just read every module -- don't read them all a second time
-            charger.poll();   // refresh charger V/I/temp/fault snapshot
-            enforceChargerDesiredState(); // catch charger drifting from our commanded state (e.g. AC-cycle auto-restart)
-        } else {
-            // Still poll BMS when Wi-Fi is absent so the display stays live
-            bms.getAllVoltTemp();
-            bms.balanceCells(false); // getAllVoltTemp() just read every module -- don't read them all a second time
-            charger.poll();   // refresh charger V/I/temp/fault snapshot
-            enforceChargerDesiredState(); // catch charger drifting from our commanded state (e.g. AC-cycle auto-restart)
-        }
+        charger.poll();   // refresh charger V/I/temp/fault snapshot
+        enforceChargerDesiredState(); // catch charger drifting from our commanded state (e.g. AC-cycle auto-restart)
 
         // Charger settings read-back. Each time the output goes from OFF to ON
         // (from any path: web UI, console, fault-resume, drift correction), read

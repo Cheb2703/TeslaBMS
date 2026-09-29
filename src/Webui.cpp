@@ -11,6 +11,7 @@
 #include "config.h"
 #include "Logger.h"
 #include "Blackbox.h"
+#include "Celldrift.h"
 #include <LittleFS.h>
 
 WebUIManager webUI;
@@ -151,6 +152,7 @@ String WebUIManager::buildStateJson(const DisplayData& dd) {
     pack["avgTemp"]    = serialized(safeFloatStr(dd.avgTemp, 1));
     pack["soc"]        = dd.socPercent;
     pack["balancing"]  = dd.balancingCount;
+    pack["balancePaused"] = dd.balancePaused;
     pack["goodPackets"] = dd.goodPackets;
     pack["badPackets"]  = dd.badPackets;
 
@@ -751,6 +753,16 @@ void WebUIManager::begin(AsyncWebServer* server, AsyncWebSocket* ws) {
         resp->addHeader("Cache-Control", "no-store");
         r->send(resp);
     });
+    // Cell drift (self-discharge) check, see Celldrift.h.
+    _server->on("/api/celldrift", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        if (!checkAuth(r)) return;
+        r->send(200, "application/json", Celldrift::json());
+    });
+    _server->on("/api/celldrift/reset", HTTP_POST, [this](AsyncWebServerRequest* r) {
+        if (!checkAuth(r)) return;
+        Celldrift::requestReset();   // done by loop()
+        sendJsonOk(r);
+    });
     _server->on("/api/blackbox/clear", HTTP_POST, [this](AsyncWebServerRequest* r) {
         if (!checkAuth(r)) return;
         Blackbox::requestClear();   // done by loop()
@@ -1028,6 +1040,13 @@ nav button.tab.active{color:var(--accent);}
       <div id="f_history"><div class="row"><span class="k">No fault history yet this boot</span></div></div>
     </div>
     <div class="card">
+      <h2>Cell Drift</h2>
+      <div class="row"><span class="k">Rested readings stored</span><span class="v" id="cd_stored">--</span></div>
+      <div class="grid2" id="cd_grid" style="margin-top:8px;"></div>
+      <div class="actionsrow"><button id="cd_reset" class="secondary">Reset Drift History</button></div>
+      <div class="hint">Once per power-on, with the pack at rest, each cell's offset from the average is saved. Each box shows the cell's offset now and its usual offset at a similar charge level. A cell that falls 10 mV or more behind its usual offset may be draining itself and shows a warning (no buzzer). Reset the history after replacing a cell or module.</div>
+    </div>
+    <div class="card">
       <h2>Black Box</h2>
       <div class="row"><span class="k">This power-on</span><span class="v" id="bb_session">--</span></div>
       <div class="row"><span class="k">Started by</span><span class="v" id="bb_reason">--</span></div>
@@ -1152,7 +1171,7 @@ document.querySelectorAll('nav .tab').forEach(btn=>{
     // less chance of tripping a known race-condition crash in the
     // underlying web server library -- see connectConsoleWs()).
     if (btn.dataset.tab === 'tab-console' && !conWs) connectConsoleWs();
-    if (btn.dataset.tab === 'tab-faults') bbLoad();
+    if (btn.dataset.tab === 'tab-faults') { bbLoad(); cdLoad(); }
   });
 });
 
@@ -1196,7 +1215,7 @@ function applyState(d){
   document.getElementById('d_soc').textContent = d.pack.soc + ' %';
   document.getElementById('d_cellrange').textContent = d.pack.cellLow + ' / ' + d.pack.cellHigh + ' V';
   document.getElementById('d_temp').textContent = d.pack.avgTemp + ' \u00b0C';
-  document.getElementById('d_bal').textContent = d.pack.balancing;
+  document.getElementById('d_bal').textContent = d.pack.balancing + (d.pack.balancePaused ? ' (on hold: pack voltage moving)' : '');
   document.getElementById('d_modules').textContent = d.sys.packsFound + ' / ' + d.sys.packsConfigured;
   document.getElementById('d_comms').textContent = d.pack.goodPackets + ' / ' + d.pack.badPackets;
   document.getElementById('d_uptime').textContent = fmtUptime(d.sys.uptimeS);
@@ -1462,8 +1481,9 @@ function bbWhen(e, boot){
 }
 function bbPill(e){
   if (e.t === 'FAULT') return 'bad';
+  if (e.t === 'WARN') return 'warn';
   if (e.t === 'CLEAR') return 'ok';
-  if (e.t === 'CHG_ON' || e.t === 'CHG_OFF') return 'info';
+  if (e.t === 'CHG_ON' || e.t === 'CHG_OFF' || e.t === 'BAL' || e.t === 'REST') return 'info';
   if (e.t === 'BOOT') return bbAbnormal(e.x) ? 'bad' : 'plain';
   if (e.t === 'SET' || e.t === 'CMD') return 'warn';
   return 'plain';
@@ -1484,6 +1504,34 @@ function bbLoad(){
     .catch(e=> toast('Could not load the black box: '+e.message, 'err'));
 }
 document.getElementById('bb_refresh').addEventListener('click', bbLoad);
+
+// ── cell drift ────────────────────────────────────────────────────────────
+function cdLoad(){
+  fetchJson('/api/celldrift').then(d=>{
+    document.getElementById('cd_stored').textContent = d.stored + ' of ' + d.history;
+    const g = document.getElementById('cd_grid');
+    if (!d.have) {
+      g.innerHTML = '<div class="hint" style="grid-column:1/-1">No rested reading yet this power-on. It is taken about 30 s after start-up if the lift and charger stay idle.</div>';
+      return;
+    }
+    const fmt = x=> (x > 0 ? '+' : '') + x;
+    let html = '';
+    [1,2].forEach(m=>{
+      const cells = d.cells.filter(c=> c.m === m);
+      if (!cells.length) return;
+      html += '<div class="modbox"><h3>Module '+m+'</h3><div class="cellgrid">' + cells.map(c=>
+        '<div class="cell"'+(c.warn?' style="border-color:var(--red);color:var(--red)"':'')+'>C'+c.c+'<br>'+fmt(c.off)+' mV<br>'+
+        '<span style="color:var(--muted)">'+(c.usual === null ? 'no history' : 'usual '+fmt(c.usual))+'</span></div>'
+      ).join('') + '</div></div>';
+    });
+    g.innerHTML = html;
+  }).catch(e=> console.error('cdLoad failed', e));
+}
+document.getElementById('cd_reset').addEventListener('click', ()=>{
+  if (!confirm('Forget all saved cell drift readings and clear any drift warning?')) return;
+  postJson('/api/celldrift/reset', {}).then(()=>{ toast('Drift history reset', 'ok'); setTimeout(cdLoad, 1500); })
+    .catch(e=> toast(e.message, 'err'));
+});
 document.getElementById('bb_download').addEventListener('click', ()=>{
   const boot = bbBootTimes();
   const q = s=> '"' + String(s).replace(/"/g, '""') + '"';
