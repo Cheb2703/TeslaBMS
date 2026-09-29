@@ -328,7 +328,7 @@ void Blackbox::faultCleared(const char* id, const char* reason, uint32_t startMi
     log("CLEAR", "%s -- lasted %s", reason, dur);
 }
 
-void Blackbox::chargerTick(bool outputOn, float amps, float packVolts, float cellSpreadMv, const char* offReason) {
+int Blackbox::chargerTick(bool outputOn, float amps, float packVolts, float cellSpreadMv, const char* offReason) {
     uint32_t now = millis();
     if (s_lastTickMs == 0) s_lastTickMs = now;
     uint32_t dt = now - s_lastTickMs;
@@ -337,7 +337,7 @@ void Blackbox::chargerTick(bool outputOn, float amps, float packVolts, float cel
 
     if (s_chgOn && outputOn && amps > 0.0f) s_chgAh += amps * (float)dt / 3600000.0f;
 
-    if (outputOn == s_chgOn) { s_chgCandidate = false; return; }
+    if (outputOn == s_chgOn) { s_chgCandidate = false; return 0; }
 
     // The state changed. It has to hold for BLACKBOX_CHARGER_SETTLE_MS, so a
     // single missed CAN reply doesn't split one charge into two. The reason and
@@ -350,7 +350,7 @@ void Blackbox::chargerTick(bool outputOn, float amps, float packVolts, float cel
         strncpy(s_chgCandidateReason, offReason ? offReason : "", sizeof(s_chgCandidateReason) - 1);
         s_chgCandidateReason[sizeof(s_chgCandidateReason) - 1] = '\0';
     }
-    if (now - s_chgCandidateSinceMs < BLACKBOX_CHARGER_SETTLE_MS) return;
+    if (now - s_chgCandidateSinceMs < BLACKBOX_CHARGER_SETTLE_MS) return 0;
 
     s_chgCandidate = false;
     s_chgOn = outputOn;
@@ -366,6 +366,7 @@ void Blackbox::chargerTick(bool outputOn, float amps, float packVolts, float cel
             s_chgCandidateReason, dur, s_chgStartV, s_chgCandidateV, s_chgAh, s_chgCandidateSpreadMv);
     }
     writeCheckpoint();
+    return s_chgOn ? 1 : 2;
 }
 
 void Blackbox::noteRestart(const char* why) {

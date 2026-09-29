@@ -14,6 +14,7 @@
 #include "Webui.h"
 #include "Blackbox.h"
 #include "Celldrift.h"
+#include "Packhealth.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
@@ -242,6 +243,15 @@ bool chargeBlockedState = false;  // a fault that holds the charger off is activ
 bool lastHwFaultState = false;   // tracks BMB_FAULT_PIN state for edge-triggered logging
 bool chargerReady = false;       // true once charger.begin() succeeds at boot -- gates the charging page
 
+// Cells are compared for balancing only on steady readings with no real charge
+// current flowing (see BALANCE_STEADY_* and BALANCE_MAX_CHARGE_A in config.h).
+bool balanceDecisionsAllowed() {
+    if (packSteadyState != 1) return false;
+    const ChargerData& cd = charger.data();
+    bool chargingHard = chargerReady && cd.online && cd.outputOn && cd.iout > BALANCE_MAX_CHARGE_A;
+    return !chargingHard;
+}
+
 // What we WANT the charger's output to be. This is the thing that survives
 // until the user toggles 'o' or the fault-interlock/fault-clear logic below
 // changes it -- it does NOT get silently overwritten by telemetry. Its
@@ -371,6 +381,20 @@ float chargerVoltMax() {
     if (ceiling > NPB24_VOLT_MAX) ceiling = NPB24_VOLT_MAX;
     if (ceiling < NPB24_VOLT_MIN) ceiling = NPB24_VOLT_MIN;
     return ceiling;
+}
+
+// The charge current the charger is actually given: the setting, halved while
+// the pack is cold or hot (CHARGE_DERATE_* in config.h). Everything that writes
+// or checks CURVE_CC uses this, so a settings save can't undo a derate.
+bool  chargeDerated = false;
+float derateLowC = NAN, derateHighC = NAN;   // coldest / hottest module sensor, for the web UI
+bool  bmsFirstReadDone = false;              // no temperatures to judge before the first module read
+
+float effectiveChargeCurrent() {
+    if (!chargeDerated) return chargerCurveCC;
+    float a = chargerCurveCC * CHARGE_DERATE_FACTOR;
+    float floorA = chargerCurveCC < CHARGE_DERATE_MIN_A ? chargerCurveCC : CHARGE_DERATE_MIN_A;
+    return a < floorA ? floorA : a;
 }
 
 // The highest the auto-restart point (CHG_RST_VBAT) may be: far enough below
@@ -540,10 +564,10 @@ uint8_t chargerVerifyFailures = 0;   // consecutive failed checks since the outp
 // CHARGER_VERIFY_ATTEMPTS failures in a row count as a real mismatch, so one
 // lost CAN message doesn't switch the charger off.
 void verifyChargerSettings() {
-    if (charger.verifyCurve(chargerCurveCC, chargerCurveCV, chargerCurveFV, chargerCurveTC)) {
+    if (charger.verifyCurve(effectiveChargeCurrent(), chargerCurveCV, chargerCurveFV, chargerCurveTC)) {
         chargerVerifyFailures = 0;
         Logger::info("Charger read-back OK: CC=%f A  CV=%f V  FV=%f V  TC=%f A",
-                     chargerCurveCC, chargerCurveCV, chargerCurveFV, chargerCurveTC);
+                     effectiveChargeCurrent(), chargerCurveCV, chargerCurveFV, chargerCurveTC);
         return;
     }
     chargerVerifyFailures++;
@@ -628,6 +652,7 @@ void setup()
     // later in setup() hangs.
     Blackbox::begin();
     Celldrift::begin();
+    Packhealth::begin();
 
     // The AP is the primary interface -- this device spends nearly all its
     // life off any home network, controlled entirely over its own AP. It
@@ -831,7 +856,7 @@ void setup()
         // profile (always, in this application). CURVE_CC/CURVE_CV below are
         // what actually govern output current/voltage; chargerVoltage/
         // chargerCurrent are just the CHGV/CHGI aliases for these same values.
-        charger.setCurveCC(chargerCurveCC);
+        charger.setCurveCC(effectiveChargeCurrent());
         applyChargeTargetVoltage(); // sets/pushes CURVE_CV, CURVE_FV and CHG_RST_VBAT from the daily/full-charge target system
         charger.setCurveTC(chargerCurveTC);
         charger.setChgRstVbat(chargerRstVbat);
@@ -1033,6 +1058,41 @@ void updateBuzzer(bool active) {
                 buzzerState = BUZZ_IDLE; // triggers the next chirp1 immediately on the next call
             }
             break;
+    }
+}
+
+// Halve the charge current while the pack is cold or hot (see config.h). The
+// new value only takes effect on the charger's next off/on toggle, so if it is
+// charging, the same live reapply a settings change uses is scheduled.
+void updateChargeDerate(const DisplayData& dd) {
+    if (!bmsFirstReadDone || dd.numModules == 0) return;
+    float lo = 1000.0f, hi = -1000.0f;
+    int mods = dd.numModules < 2 ? dd.numModules : 2;
+    for (int m = 0; m < mods; m++) {
+        float t[2] = { dd.tempNeg[m], dd.tempPos[m] };
+        for (float x : t) {
+            if (isnan(x) || x < -40.0f || x > 120.0f) continue;   // a bad sensor is its own fault
+            if (x < lo) lo = x;
+            if (x > hi) hi = x;
+        }
+    }
+    if (lo > hi) return;   // no usable sensor
+    derateLowC = lo;
+    derateHighC = hi;
+
+    bool want = chargeDerated
+        ? !(lo >= CHARGE_DERATE_COLD_C + CHARGE_DERATE_HYST_C && hi <= CHARGE_DERATE_HOT_C - CHARGE_DERATE_HYST_C)
+        : (lo < CHARGE_DERATE_COLD_C || hi > CHARGE_DERATE_HOT_C);
+    if (want == chargeDerated) return;
+    chargeDerated = want;
+
+    float amps = effectiveChargeCurrent();
+    if (want) Blackbox::log("TEMP", "Charge current halved to %.1f A: coldest sensor %.1f C, hottest %.1f C", amps, lo, hi);
+    else      Blackbox::log("TEMP", "Charge current back to the full %.1f A: coldest sensor %.1f C, hottest %.1f C", amps, lo, hi);
+    if (chargerReady) {
+        if (!charger.setCurveCC(amps))
+            Logger::error("Charge current change for temperature: write to charger failed -- charger not responding");
+        if (desiredChargerOn && !chargeBlockedState) chargerCurveReapplyPending = true;
     }
 }
 
@@ -1238,7 +1298,7 @@ void loop()
                 if (resumeChargerAfterFault) {
                     resumeChargerAfterFault = false;
                     desiredChargerOn = true;
-                    charger.setCurveCC(chargerCurveCC);
+                    charger.setCurveCC(effectiveChargeCurrent());
                     charger.setCurveCV(chargerCurveCV);
                     if (charger.setOutput(true))
                         Logger::info("Charging block cleared -- charger was on before, output commanded back ON");
@@ -1292,12 +1352,15 @@ void loop()
                             : (cd.chgStatus & NPB_CHG_FULLM)    ? "charger reports full"
                             : !desiredChargerOn                 ? "switched off"
                             :                                     "charger stopped by itself";
-            Blackbox::chargerTick(on, on ? cd.iout : 0.0f, dd.packVoltage, (dd.cellHigh - dd.cellLow) * 1000.0f, why);
+            int chargeEvent = Blackbox::chargerTick(on, on ? cd.iout : 0.0f, dd.packVoltage,
+                                                    (dd.cellHigh - dd.cellLow) * 1000.0f, why);
 
             // Cell drift: once per power-on, a rested reading (steady, charger off).
             Celldrift::poll(dd, packsConfigured, packSteadyState, on, bms);
+            // Charge wiring resistance and capacity, from the same charge sessions.
+            Packhealth::poll(dd, chargeEvent, chargerReady && cd.online, on, cd.vout, cd.iout, packSteadyState, bms);
         }
-        dd.balancePaused = (packSteadyState != 1);
+        dd.balancePaused = !balanceDecisionsAllowed();
 
         dd.hasFaultHistory          = hasFaultHistory;
         dd.lastFaultDurationMs      = lastFaultDurationMs;
@@ -1322,6 +1385,8 @@ void loop()
                 WiFi.begin(wifiSSID.c_str(), wifiPassword.c_str());
             }
         }
+
+        updateChargeDerate(dd);
 
         // Apply a curve-register change requested via the WebUI's /api/charger
         // handler. Deliberately done here, not inside the request handler --
@@ -1352,11 +1417,13 @@ void loop()
         if (WiFi.status() == WL_CONNECTED) flashBlue(3);
 
         bms.getAllVoltTemp();
+        if (bms.getPackVoltage() > 1.0f) bmsFirstReadDone = true;
         updatePackSteadiness(bms.getPackVoltage());
-        // Balance only on steady readings -- not while the lift motor is pulling
-        // the cells down unevenly. Meanwhile the boards keep the last decision
+        // Balance only on steady readings, and not while the charger pushes real
+        // current: the lift motor sags cells unevenly, and charging lifts each
+        // cell by its own resistance. Meanwhile the boards keep the last decision
         // (their own timer runs up to 63 min, see BALANCE_TIMER_REG).
-        if (packSteadyState == 1)
+        if (balanceDecisionsAllowed())
             bms.balanceCells(false); // getAllVoltTemp() just read every module -- don't read them all a second time
         charger.poll();   // refresh charger V/I/temp/fault snapshot
         enforceChargerDesiredState(); // catch charger drifting from our commanded state (e.g. AC-cycle auto-restart)

@@ -64,6 +64,7 @@ extern bool     autoTopUpSuspended;      // see main.cpp -- an explicit OFF here
 extern bool     chargerFullChargeArmed;  // see main.cpp -- cleared whenever the override is toggled here
 extern void     applyChargeTargetVoltage();
 extern float    chargerRestartMaxV();    // highest allowed auto-restart point: daily target less a margin
+extern float    effectiveChargeCurrent(); // the charge current setting, halved while the pack is cold or hot
 
 // Shared by every CHGxxx curve-parameter command below. Curve-family
 // registers (CURVE_CC/CV/FV/TC, CHG_RST_VBAT, the *_TIMEOUT registers) only
@@ -432,7 +433,7 @@ void SerialConsole::handleConfigCmd() {
         preferences.putFloat("chgCurrent", chargerCurrent);
         preferences.putFloat("chgCurveCC", chargerCurveCC);
         preferences.end();
-        if (charger.setCurveCC(chargerCurveCC))
+        if (charger.setCurveCC(effectiveChargeCurrent()))
             reapplyIfRunning("CHGI", oldVal, chargerCurrent);
         else
             Logger::console("CHGI: saved %f but write to charger failed -- charger not responding", chargerCurrent);
@@ -444,7 +445,7 @@ void SerialConsole::handleConfigCmd() {
         preferences.putFloat("chgCurveCC", chargerCurveCC);
         preferences.putFloat("chgCurrent", chargerCurrent);
         preferences.end();
-        if (charger.setCurveCC(chargerCurveCC))
+        if (charger.setCurveCC(effectiveChargeCurrent()))
             reapplyIfRunning("CHGCC", oldVal, chargerCurveCC);
         else
             Logger::console("CHGCC: saved %f but write to charger failed -- charger not responding", chargerCurveCC);

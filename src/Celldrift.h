@@ -32,6 +32,10 @@ namespace Celldrift {
     // 0 = not enough readings yet this power-on, 1 = steady, 2 = moving.
     void poll(const DisplayData& dd, int modulesExpected, int steadyState, bool chargerOn, BMSModuleManager& bms);
 
+    // This power-on's rested reading (average cell voltage), once it has been
+    // taken. Packhealth uses it as the "after" point of a capacity estimate.
+    bool   restedMeanV(float& meanV);
+
     void   requestReset();   // web task; done by poll()
     String json();           // web task: the last evaluation, for the Faults tab
 }

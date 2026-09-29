@@ -54,7 +54,9 @@ namespace Blackbox {
     // offReason and cellSpreadMv are only used on the ON -> OFF edge: the spread
     // at the top of a charge shows whether mid-charge balancing (which the pack
     // mostly gets) is leaving the cells apart where it matters.
-    void chargerTick(bool outputOn, float amps, float packVolts, float cellSpreadMv, const char* offReason);
+    // Returns what just happened, for other code that follows charge sessions:
+    // 0 = nothing, 1 = a charge session started, 2 = it stopped.
+    int  chargerTick(bool outputOn, float amps, float packVolts, float cellSpreadMv, const char* offReason);
 
     // Say why the next restart happens, just before calling esp_restart(), so
     // the boot line can tell a Reboot button from a firmware update. Kept in

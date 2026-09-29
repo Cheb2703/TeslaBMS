@@ -31,6 +31,8 @@ History  s_hist;
 uint16_t s_bledMask = 0;   // cells balanced since the last reading; saved as it grows
 bool     s_done = false;   // this power-on's reading is taken (or given up on)
 bool     s_warningsRestored = false;
+bool     s_haveRestedMean = false;   // this power-on's reading was taken
+float    s_restedMeanV = 0.0f;
 volatile bool s_resetPending = false;
 
 // The last evaluation, for the web UI. Written by loop(), copied out by the web
@@ -81,6 +83,8 @@ void takeReading(const DisplayData& dd, int cells, BMSModuleManager& bms) {
         if (v[i] > hi) hi = v[i];
     }
     float mean = sum / cells;
+    s_restedMeanV = mean;
+    s_haveRestedMean = true;
 
     Sample now;
     now.meanMv   = (uint16_t)lroundf(mean * 1000.0f);
@@ -221,6 +225,12 @@ void Celldrift::poll(const DisplayData& dd, int modulesExpected, int steadyState
     }
     s_done = true;
     takeReading(dd, cells, bms);
+}
+
+bool Celldrift::restedMeanV(float& meanV) {
+    if (!s_haveRestedMean) return false;
+    meanV = s_restedMeanV;
+    return true;
 }
 
 void Celldrift::requestReset() { s_resetPending = true; }

@@ -12,6 +12,7 @@
 #include "Logger.h"
 #include "Blackbox.h"
 #include "Celldrift.h"
+#include "Packhealth.h"
 #include <LittleFS.h>
 
 WebUIManager webUI;
@@ -68,6 +69,9 @@ extern uint16_t chargerSysConfigRaw;     // charger SYSTEM_CONFIG, cached by loo
 extern uint16_t chargerCurveConfigRaw;   // charger CURVE_CONFIG, cached by loop() -- see main.cpp
 extern void     applyChargeTargetVoltage();
 extern float    chargerRestartMaxV();    // highest allowed auto-restart point: daily target less a margin
+extern float    effectiveChargeCurrent(); // the charge current setting, halved while the pack is cold or hot
+extern bool     chargeDerated;
+extern float    derateLowC, derateHighC;
 
 static bool s_lastFaultActive = false;   // updated each pushState(), read by the charger-output-on guard
 
@@ -202,6 +206,10 @@ String WebUIManager::buildStateJson(const DisplayData& dd) {
     chg["lastRxAgoMs"]  = dd.chargerLastRxAgoMs;
     chg["fullChargeOverride"] = chargerFullChargeOverride;
     chg["activeTargetV"]      = serialized(safeFloatStr(chargerCurveCV, 2));
+    chg["effectiveCC"]        = serialized(safeFloatStr(effectiveChargeCurrent(), 1));
+    chg["derated"]            = chargeDerated;
+    chg["tempLowC"]           = serialized(safeFloatStr(derateLowC, 1));
+    chg["tempHighC"]          = serialized(safeFloatStr(derateHighC, 1));
 
     // The charger's own two configuration registers, cached by loop() (see
     // refreshChargerConfigSnapshot() in main.cpp). These decide whether the
@@ -453,7 +461,7 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
         logChange("Charger current", before, chargerCurveCC, 2);
         preferences.putFloat("chgCurrent", chargerCurrent);
         preferences.putFloat("chgCurveCC", chargerCurveCC);
-        charger.setCurveCC(chargerCurveCC);
+        charger.setCurveCC(effectiveChargeCurrent());
         curveChanged = true;
     }
     if (doc["curveCC"].is<float>()) {
@@ -463,7 +471,7 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
         chargerCurrent = chargerCurveCC;
         preferences.putFloat("chgCurveCC", chargerCurveCC);
         preferences.putFloat("chgCurrent", chargerCurrent);
-        charger.setCurveCC(chargerCurveCC);
+        charger.setCurveCC(effectiveChargeCurrent());
         curveChanged = true;
     }
     if (doc["curveCV"].is<float>()) {
@@ -753,6 +761,17 @@ void WebUIManager::begin(AsyncWebServer* server, AsyncWebSocket* ws) {
         resp->addHeader("Cache-Control", "no-store");
         r->send(resp);
     });
+    // Charge wiring resistance and capacity, see Packhealth.h.
+    _server->on("/api/packhealth", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        if (!checkAuth(r)) return;
+        r->send(200, "application/json", Packhealth::json());
+    });
+    _server->on("/api/packhealth/reset", HTTP_POST, [this](AsyncWebServerRequest* r) {
+        if (!checkAuth(r)) return;
+        Packhealth::requestReset();   // done by loop()
+        sendJsonOk(r);
+    });
+
     // Cell drift (self-discharge) check, see Celldrift.h.
     _server->on("/api/celldrift", HTTP_GET, [this](AsyncWebServerRequest* r) {
         if (!checkAuth(r)) return;
@@ -972,6 +991,7 @@ nav button.tab.active{color:var(--accent);}
       <div class="row"><span class="k">Output</span><span class="v" id="c_output">--</span></div>
       <div class="row"><span class="k">Output Voltage</span><span class="v" id="c_vout">--</span></div>
       <div class="row"><span class="k">Output Current</span><span class="v" id="c_iout">--</span></div>
+      <div class="row"><span class="k">Charge Current Allowed</span><span class="v" id="c_effCC">--</span></div>
       <div class="row"><span class="k">Charger Temp</span><span class="v" id="c_temp">--</span></div>
       <div class="row"><span class="k">Stage</span><span class="v" id="c_stage">--</span></div>
       <div class="row"><span class="k">Fault</span><span class="v" id="c_fault">--</span></div>
@@ -996,6 +1016,18 @@ nav button.tab.active{color:var(--accent);}
         <button id="c_fullChargeBtn" class="secondary">Full-Charge Override: OFF</button>
         <button id="c_autoTopUpBtn" class="secondary">Auto Top-Up: OFF</button>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>Pack Health</h2>
+      <div class="row"><span class="k">Capacity (estimated)</span><span class="v" id="ph_cap">--</span></div>
+      <div class="row"><span class="k">Charge wiring resistance</span><span class="v" id="ph_wire">--</span></div>
+      <div class="row"><span class="k">Charger vs cells at 0 A</span><span class="v" id="ph_off">--</span></div>
+      <div class="actionsrow">
+        <button id="ph_refresh" class="secondary">Refresh</button>
+        <button id="ph_reset" class="secondary">Reset History</button>
+      </div>
+      <div class="hint">Capacity: amp-hours put in by a charge, divided by how far it moved the pack's rested charge level (the reading before the charge and at the next power-on). Needs charges of 20% or more, and a power-on where the lift and charger stay idle for about 30 s. Rough per charge; the median over several is the figure to watch. Wiring resistance: charger voltage minus cell voltage, per amp, while charging -- a rising value means a connection working loose. A clear rise shows a warning (no buzzer).</div>
     </div>
 
     <div class="card">
@@ -1172,6 +1204,7 @@ document.querySelectorAll('nav .tab').forEach(btn=>{
     // underlying web server library -- see connectConsoleWs()).
     if (btn.dataset.tab === 'tab-console' && !conWs) connectConsoleWs();
     if (btn.dataset.tab === 'tab-faults') { bbLoad(); cdLoad(); }
+    if (btn.dataset.tab === 'tab-charge') phLoad();
   });
 });
 
@@ -1215,7 +1248,7 @@ function applyState(d){
   document.getElementById('d_soc').textContent = d.pack.soc + ' %';
   document.getElementById('d_cellrange').textContent = d.pack.cellLow + ' / ' + d.pack.cellHigh + ' V';
   document.getElementById('d_temp').textContent = d.pack.avgTemp + ' \u00b0C';
-  document.getElementById('d_bal').textContent = d.pack.balancing + (d.pack.balancePaused ? ' (on hold: pack voltage moving)' : '');
+  document.getElementById('d_bal').textContent = d.pack.balancing + (d.pack.balancePaused ? ' (decisions on hold: charging, or pack voltage moving)' : '');
   document.getElementById('d_modules').textContent = d.sys.packsFound + ' / ' + d.sys.packsConfigured;
   document.getElementById('d_comms').textContent = d.pack.goodPackets + ' / ' + d.pack.badPackets;
   document.getElementById('d_uptime').textContent = fmtUptime(d.sys.uptimeS);
@@ -1244,6 +1277,9 @@ function applyState(d){
     ? '<span class="pill ok">ON</span>' : '<span class="pill warn">OFF</span>';
   document.getElementById('c_vout').textContent = d.charger.vout + ' V';
   document.getElementById('c_iout').textContent = d.charger.iout + ' A';
+  document.getElementById('c_effCC').innerHTML = d.charger.derated
+    ? '<span class="pill warn">'+d.charger.effectiveCC+' A (half: pack '+d.charger.tempLowC+'\u2013'+d.charger.tempHighC+' \u00b0C)</span>'
+    : d.charger.effectiveCC + ' A';
   document.getElementById('c_temp').textContent = d.charger.temp + ' \u00b0C';
   document.getElementById('c_stage').textContent = d.charger.chgStatusStr;
   document.getElementById('c_fault').innerHTML = d.charger.faulted
@@ -1483,7 +1519,7 @@ function bbPill(e){
   if (e.t === 'FAULT') return 'bad';
   if (e.t === 'WARN') return 'warn';
   if (e.t === 'CLEAR') return 'ok';
-  if (e.t === 'CHG_ON' || e.t === 'CHG_OFF' || e.t === 'BAL' || e.t === 'REST') return 'info';
+  if (e.t === 'CHG_ON' || e.t === 'CHG_OFF' || e.t === 'BAL' || e.t === 'REST' || e.t === 'CAP' || e.t === 'WIRE' || e.t === 'TEMP') return 'info';
   if (e.t === 'BOOT') return bbAbnormal(e.x) ? 'bad' : 'plain';
   if (e.t === 'SET' || e.t === 'CMD') return 'warn';
   return 'plain';
@@ -1504,6 +1540,26 @@ function bbLoad(){
     .catch(e=> toast('Could not load the black box: '+e.message, 'err'));
 }
 document.getElementById('bb_refresh').addEventListener('click', bbLoad);
+
+// ── pack health ───────────────────────────────────────────────────────────
+function phLoad(){
+  fetchJson('/api/packhealth').then(d=>{
+    const c = d.capacity, w = d.wiring;
+    document.getElementById('ph_cap').textContent = c.n
+      ? c.median + ' Ah (median of ' + c.n + ', last ' + c.last + ' Ah)'
+      : (c.charging ? 'measuring this charge (' + c.sessionAh + ' Ah so far)' : (c.waiting ? 'waiting for a rested reading' : 'no estimate yet'));
+    document.getElementById('ph_wire').innerHTML = w.n
+      ? (w.warn ? '<span class="pill warn">' : '<span>') + w.last + ' m\u03a9 (usual ' + w.usual + ')</span>'
+      : 'measured during the next charge';
+    document.getElementById('ph_off').textContent = d.offsetKnown ? d.offsetMv + ' mV' : 'not measured yet';
+  }).catch(e=> console.error('phLoad failed', e));
+}
+document.getElementById('ph_refresh').addEventListener('click', phLoad);
+document.getElementById('ph_reset').addEventListener('click', ()=>{
+  if (!confirm('Forget all capacity estimates and wiring readings, and clear any wiring warning?')) return;
+  postJson('/api/packhealth/reset', {}).then(()=>{ toast('Pack health history reset', 'ok'); setTimeout(phLoad, 1500); })
+    .catch(e=> toast(e.message, 'err'));
+});
 
 // ── cell drift ────────────────────────────────────────────────────────────
 function cdLoad(){

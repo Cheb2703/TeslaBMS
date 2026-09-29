@@ -100,6 +100,14 @@
 #define BALANCE_STEADY_READINGS   10
 #define BALANCE_STEADY_MAX_V      0.030f
 
+// Nor while the charger pushes more than this. Charging raises each cell's
+// reading by its own internal resistance, so the spread widens: measured on
+// this pack, 4 mV at rest became 11 mV at 20 A (2026-09-28) -- more than the
+// 7 mV balancing margin, which would bleed the higher-resistance cells instead
+// of the fuller ones. At the end of the charge the current tapers below this
+// and balancing resumes near the top, where it matters most.
+#define BALANCE_MAX_CHARGE_A      2.0f
+
 // The boards' own balance timer (BQ76PL536A CB_TIME, 0x33): bit 7 = minutes,
 // bits 5-0 = time, 63 at most. Every command restarts it, so while the ESP32
 // runs it never expires; once the ESP32 is powered off, each board keeps
@@ -124,6 +132,26 @@
 #define DRIFT_COMPARE_V           0.050f
 #define DRIFT_WARN_MV             10.0f
 #define DRIFT_SNAPSHOT_WINDOW_MS  (10UL * 60UL * 1000UL)   // give up on this power-on's reading after this long
+
+// -- Charge current by temperature ----------------------------------------------
+// Below CHARGE_DERATE_COLD_C (coldest module sensor) or above CHARGE_DERATE_HOT_C
+// (hottest), the charge current setting is multiplied by CHARGE_DERATE_FACTOR.
+// It goes back to full only CHARGE_DERATE_HYST_C inside the band, so it can't
+// flip back and forth. Cold cells take charge less well (lithium plating) and
+// hot cells age faster. The Temp Low / Temp High fault limits stay the hard stop.
+// Owner's choice (2026-09-28): half current only, no extra pause.
+#define CHARGE_DERATE_COLD_C      10.0f
+#define CHARGE_DERATE_HOT_C       45.0f
+#define CHARGE_DERATE_HYST_C      2.0f
+#define CHARGE_DERATE_FACTOR      0.5f
+#define CHARGE_DERATE_MIN_A       2.5f    // never ask the charger for less (it has a lower limit of its own)
+
+// -- Pack health: charge wiring resistance and capacity (see Packhealth.h) ------
+#define WIRING_MIN_CURRENT_A      5.0f    // only measure while charging at least this hard
+#define WIRING_MIN_SAMPLES        20      // 1-second samples needed for a session's figure
+#define WIRING_WARN_RISE_MOHM     5.0f    // warn when the resistance rises this much...
+#define WIRING_WARN_RISE_FRAC     0.5f    // ...AND by this fraction above its usual value
+#define CAPACITY_MIN_SOC_STEP     0.20f   // a charge must move the rested charge level this much to estimate capacity
 
 //extern HardwareSerial Serial1; // Leftover from back in the day when this ran on arduino
 
