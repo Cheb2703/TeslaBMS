@@ -472,9 +472,9 @@ void DisplayManager::drawCellBlock(lgfx::LGFX_Sprite& s, int cellIdx,
     int barW = 60;
     int barH = 3;
     s.fillRect(barX, barY, barW, barH, COL_BORDER);
-    float pct = (volt - 3.0f) / (4.15f - 3.0f);
-    pct = pct < 0.0f ? 0.0f : (pct > 1.0f ? 1.0f : pct);
-    int filled = (int)(barW * pct);
+    // Same NCA table as the pack SoC, so the bars agree with the percentage
+    // (already clamped to 0-1, NaN reads 0).
+    int filled = (int)(barW * socFractionFromOcv(volt));
     if (filled > 0) s.fillRect(barX, barY, filled, barH, col);
 }
 
