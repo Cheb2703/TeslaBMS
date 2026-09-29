@@ -2,6 +2,7 @@
 #include "BMSModuleManager.h"
 #include "BMSUtil.h"
 #include "Logger.h"
+#include "Blackbox.h"
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
@@ -459,6 +460,7 @@ void BMSModuleManager::getAllVoltTemp()
         if (faultList[i].active && faultList[i].id[0] == 'M' && isdigit((unsigned char)faultList[i].id[1])) {
             int m = atoi(&faultList[i].id[1]);
             if (m >= 1 && m <= MAX_MODULE_ADDR && !modules[m].isExisting()) {
+                Blackbox::faultCleared(faultList[i].id, faultList[i].reason, faultList[i].startMillis);
                 faultList[i].active = false;
             }
         }
@@ -825,6 +827,9 @@ void BMSModuleManager::reportFault(const char* id, const char* reason, bool bloc
         if (faultList[i].active && strcmp(faultList[i].id, id) == 0) {
             strncpy(faultList[i].reason, reason, sizeof(faultList[i].reason) - 1);
             faultList[i].reason[sizeof(faultList[i].reason) - 1] = '\0';
+            // A low cell that keeps falling turns into a deep discharge, which
+            // does block charging -- worth its own black-box line.
+            if (blocksCharger && !faultList[i].blocksCharger) Blackbox::log("FAULT", "%s (now blocks charging)", reason);
             faultList[i].blocksCharger = blocksCharger; // can change while active (a low cell that keeps falling)
             return; // already active -- keep the original startMillis
         }
@@ -839,6 +844,7 @@ void BMSModuleManager::reportFault(const char* id, const char* reason, bool bloc
             faultList[i].reason[sizeof(faultList[i].reason) - 1] = '\0';
             faultList[i].startMillis = millis();
             faultList[i].blocksCharger = blocksCharger;
+            Blackbox::faultRaised(id, reason, blocksCharger);
             return;
         }
     }
@@ -850,6 +856,7 @@ void BMSModuleManager::reportFault(const char* id, const char* reason, bool bloc
 void BMSModuleManager::clearFaultById(const char* id) {
     for (int i = 0; i < MAX_ACTIVE_FAULTS; i++) {
         if (faultList[i].active && strcmp(faultList[i].id, id) == 0) {
+            Blackbox::faultCleared(faultList[i].id, faultList[i].reason, faultList[i].startMillis);
             faultList[i].active = false;
             return;
         }

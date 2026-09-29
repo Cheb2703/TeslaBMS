@@ -10,6 +10,8 @@
 #include "SerialConsole.h"
 #include "config.h"
 #include "Logger.h"
+#include "Blackbox.h"
+#include <LittleFS.h>
 
 WebUIManager webUI;
 WebSerialTee webSerialTee;   // the single global instance SERIALCONSOLE now points at (see config.h)
@@ -81,6 +83,16 @@ static String safeFloatStr(float v, int decimals) {
     return String(v, decimals);
 }
 
+// Black-box line for a setting changed from the web UI -- only when it really
+// changed, because the page sends every field on every Save.
+static void logChange(const char* what, float before, float after, int decimals) {
+    if (fabsf(before - after) < 0.0005f) return;
+    Blackbox::log("SET", "%s %.*f -> %.*f (web UI)", what, decimals, before, decimals, after);
+}
+static void logChange(const char* what, bool before, bool after) {
+    if (before != after) Blackbox::log("SET", "%s %s (web UI)", what, after ? "ON" : "OFF");
+}
+
 static void sendJsonOk(AsyncWebServerRequest* request, JsonDocument& extra) {
     extra["ok"] = true;
     String out;
@@ -128,6 +140,9 @@ String WebUIManager::buildStateJson(const DisplayData& dd) {
     sys["apIP"]             = WiFi.softAPIP().toString();
     sys["apSSID"]           = apSSID;
     sys["freeHeapKB"]       = ESP.getFreeHeap() / 1024;
+    sys["session"]          = Blackbox::session();       // power-on counter
+    sys["resetReason"]      = Blackbox::resetReason();   // why this power-on started
+    sys["clockKnown"]       = Blackbox::clockKnown();
 
     JsonObject pack = doc["pack"].to<JsonObject>();
     pack["voltage"]    = serialized(safeFloatStr(dd.packVoltage, 2));
@@ -296,33 +311,47 @@ void WebUIManager::onApiSettingsPost(AsyncWebServerRequest* request, const Strin
     }
     if (doc["packsConfigured"].is<int>()) {
         int v = doc["packsConfigured"].as<int>();
+        int before = packsConfigured;
         packsConfigured = v < 1 ? 1 : (v > MAX_MODULE_ADDR ? MAX_MODULE_ADDR : v);
+        logChange("Packs Configured", (float)before, (float)packsConfigured, 0);
         preferences.putInt("packsConfigured", packsConfigured);
     }
     if (doc["balanceVoltage"].is<float>()) {
+        float before = balanceVoltage;
         balanceVoltage = clampf(doc["balanceVoltage"].as<float>(), 2.5f, 4.3f);
+        logChange("Balance Voltage", before, balanceVoltage, 3);
         settings.balanceVoltage = balanceVoltage;
         preferences.putFloat("balanceVoltage", balanceVoltage);
     }
     if (doc["balanceHyst"].is<float>()) {
+        float before = balanceHyst;
         balanceHyst = clampf(doc["balanceHyst"].as<float>(), 0.001f, 0.5f);
+        logChange("Balance Hysteresis", before, balanceHyst, 3);
         settings.balanceHyst = balanceHyst;
         preferences.putFloat("balanceHyst", balanceHyst);
     }
     if (doc["voltLimHi"].is<float>()) {
+        float before = settings.OverVSetpoint;
         settings.OverVSetpoint = clampf(doc["voltLimHi"].as<float>(), 2.5f, CELL_VOLT_ABS_MAX);
+        logChange("Cell Volt High", before, settings.OverVSetpoint, 3);
         preferences.putFloat("overVSetpoint", settings.OverVSetpoint);
     }
     if (doc["voltLimLo"].is<float>()) {
+        float before = settings.UnderVSetpoint;
         settings.UnderVSetpoint = clampf(doc["voltLimLo"].as<float>(), 1.5f, 4.0f);
+        logChange("Cell Volt Low", before, settings.UnderVSetpoint, 3);
         preferences.putFloat("underVSetpoint", settings.UnderVSetpoint);
     }
     if (doc["tempLimHi"].is<float>()) {
+        float before = settings.OverTSetpoint;
         settings.OverTSetpoint = clampf(doc["tempLimHi"].as<float>(), 0.0f, 100.0f);
+        logChange("Temp High", before, settings.OverTSetpoint, 1);
         preferences.putFloat("overTSetpoint", settings.OverTSetpoint);
     }
     if (doc["tempLimLo"].is<float>()) {
+        float before = settings.UnderTSetpoint;
         settings.UnderTSetpoint = clampf(doc["tempLimLo"].as<float>(), -40.0f, 50.0f);
+        logChange("Temp Low", before, settings.UnderTSetpoint, 1);
         preferences.putFloat("underTSetpoint", settings.UnderTSetpoint);
     }
 
@@ -406,23 +435,29 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
     bool curveChanged = false;
 
     if (doc["voltage"].is<float>()) {
+        float before = chargerCurveCV;
         chargerVoltage = clampf(doc["voltage"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
         chargerCurveCV = chargerVoltage;
+        logChange("Charger voltage", before, chargerCurveCV, 2);
         preferences.putFloat("chgVoltage", chargerVoltage);
         preferences.putFloat("chgCurveCV", chargerCurveCV);
         charger.setCurveCV(chargerCurveCV);
         curveChanged = true;
     }
     if (doc["current"].is<float>()) {
+        float before = chargerCurveCC;
         chargerCurrent = clampf(doc["current"].as<float>(), NPB24_CURR_MIN, NPB24_CURR_MAX);
         chargerCurveCC = chargerCurrent;
+        logChange("Charger current", before, chargerCurveCC, 2);
         preferences.putFloat("chgCurrent", chargerCurrent);
         preferences.putFloat("chgCurveCC", chargerCurveCC);
         charger.setCurveCC(chargerCurveCC);
         curveChanged = true;
     }
     if (doc["curveCC"].is<float>()) {
+        float before = chargerCurveCC;
         chargerCurveCC = clampf(doc["curveCC"].as<float>(), NPB24_CURR_MIN, NPB24_CURR_MAX);
+        logChange("Curve CC", before, chargerCurveCC, 2);
         chargerCurrent = chargerCurveCC;
         preferences.putFloat("chgCurveCC", chargerCurveCC);
         preferences.putFloat("chgCurrent", chargerCurrent);
@@ -430,7 +465,9 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
         curveChanged = true;
     }
     if (doc["curveCV"].is<float>()) {
+        float before = chargerCurveCV;
         chargerCurveCV = clampf(doc["curveCV"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
+        logChange("Curve CV", before, chargerCurveCV, 2);
         chargerVoltage = chargerCurveCV;
         preferences.putFloat("chgCurveCV", chargerCurveCV);
         preferences.putFloat("chgVoltage", chargerVoltage);
@@ -438,13 +475,17 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
         curveChanged = true;
     }
     if (doc["curveFV"].is<float>()) {
+        float before = chargerCurveFV;
         chargerCurveFV = clampf(doc["curveFV"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
+        logChange("Curve FV", before, chargerCurveFV, 2);
         preferences.putFloat("chgCurveFV", chargerCurveFV);
         charger.setCurveFV(chargerCurveFV);
         curveChanged = true;
     }
     if (doc["curveTC"].is<float>()) {
+        float before = chargerCurveTC;
         chargerCurveTC = clampf(doc["curveTC"].as<float>(), NPB24_CURR_MIN, NPB24_CURR_MAX);
+        logChange("Curve TC", before, chargerCurveTC, 2);
         preferences.putFloat("chgCurveTC", chargerCurveTC);
         charger.setCurveTC(chargerCurveTC);
         curveChanged = true;
@@ -454,18 +495,23 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
     // idea as voltage/curveCV above but through the daily/full lens instead
     // of a raw manual value.
     if (doc["dailyTargetV"].is<float>()) {
+        float before = chargerDailyTargetV;
         chargerDailyTargetV = clampf(doc["dailyTargetV"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
+        logChange("Daily Charge Target", before, chargerDailyTargetV, 2);
         preferences.putFloat("chgDailyV", chargerDailyTargetV);
         applyChargeTargetVoltage();
         if (!chargerFullChargeOverride) curveChanged = true; // only matters live if it's the active target right now
     }
     if (doc["fullTargetV"].is<float>()) {
+        float before = chargerFullTargetV;
         chargerFullTargetV = clampf(doc["fullTargetV"].as<float>(), NPB24_VOLT_MIN, chargerVoltMax());
+        logChange("Full-Charge Target", before, chargerFullTargetV, 2);
         preferences.putFloat("chgFullV", chargerFullTargetV);
         applyChargeTargetVoltage();
         if (chargerFullChargeOverride) curveChanged = true;
     }
     if (doc["fullChargeOverride"].is<bool>()) {
+        logChange("Full-charge override", chargerFullChargeOverride, doc["fullChargeOverride"].as<bool>());
         chargerFullChargeOverride = doc["fullChargeOverride"].as<bool>();
         // Nothing has been observed about this charge cycle yet, so the
         // auto-revert has to wait for one to actually run -- see the FULLM
@@ -478,16 +524,19 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
     }
 
     if (doc["autoTopUp"].is<bool>()) {
+        logChange("Auto Top-Up", autoTopUpEnabled, doc["autoTopUp"].as<bool>());
         autoTopUpEnabled = doc["autoTopUp"].as<bool>();
         autoTopUpSuspended = false; // toggling it is a fresh decision either way
         preferences.putBool("autoTopUp", autoTopUpEnabled);
     }
 
     if (doc["restartVbat"].is<float>()) {
+        float before = chargerRstVbat;
         // Clamped against the DAILY target, not the pack ceiling: an
         // auto-restart point at or above the target means the pack is always
         // below it, so the charger restarts a cycle the moment it finishes one.
         chargerRstVbat = clampf(doc["restartVbat"].as<float>(), NPB24_VOLT_MIN, chargerRestartMaxV());
+        logChange("Restart At", before, chargerRstVbat, 2);
         preferences.putFloat("chgRstVbat", chargerRstVbat);
         charger.setChgRstVbat(chargerRstVbat);
         curveChanged = true;
@@ -519,9 +568,11 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
     if (outputRequested) {
         bool wantOn = doc["outputOn"].as<bool>();
         if (wantOn && s_lastFaultActive) {
+            Blackbox::log("CMD", "Charger ON from the web UI refused: a fault is holding it off");
             sendJsonError(request, "refused: an active BMS fault is holding the output OFF", 409);
             return;
         }
+        Blackbox::log("CMD", "Charger output %s from the web UI", wantOn ? "ON" : "OFF");
         resumeChargerAfterFault = false; // your explicit command replaces any "resume after fault"
         // An explicit OFF has to stick: suspend the automatic top-up until an
         // equally explicit ON (or a re-toggle of the setting) releases it.
@@ -562,12 +613,14 @@ void WebUIManager::onApiChargerPost(AsyncWebServerRequest* request, const String
 
 void WebUIManager::onApiFaultsClear(AsyncWebServerRequest* request) {
     if (!checkAuth(request)) return;
+    Blackbox::log("CMD", "Clear Faults pressed in the web UI");
     queueConsoleCommand("C");   // the console's "clear all faults"; run by loop(), not this task
     sendJsonOk(request);
 }
 
 void WebUIManager::onApiReboot(AsyncWebServerRequest* request) {
     if (!checkAuth(request)) return;
+    Blackbox::noteRestart("Reboot button in the web UI");
     sendJsonOk(request);
     xTaskCreate([](void*) {
         delay(500);
@@ -687,6 +740,30 @@ void WebUIManager::begin(AsyncWebServer* server, AsyncWebSocket* ws) {
     _server->on("/api/faults/clear", HTTP_POST, [this](AsyncWebServerRequest* r) { onApiFaultsClear(r); });
     _server->on("/api/reboot", HTTP_POST, [this](AsyncWebServerRequest* r) { onApiReboot(r); });
 
+    // Black box (see Blackbox.h). ?part=old returns the older, rotated file.
+    // Served straight from LittleFS in chunks, so a big log doesn't need a big
+    // buffer. The file is only ever rotated at boot, never while being read.
+    _server->on("/api/blackbox", HTTP_GET, [this](AsyncWebServerRequest* r) {
+        if (!checkAuth(r)) return;
+        const char* path = (r->hasParam("part") && r->getParam("part")->value() == "old") ? BLACKBOX_LOG_OLD : BLACKBOX_LOG;
+        if (!LittleFS.exists(path)) { r->send(200, "text/plain", ""); return; }
+        AsyncWebServerResponse* resp = r->beginResponse(LittleFS, path, "text/plain");
+        resp->addHeader("Cache-Control", "no-store");
+        r->send(resp);
+    });
+    _server->on("/api/blackbox/clear", HTTP_POST, [this](AsyncWebServerRequest* r) {
+        if (!checkAuth(r)) return;
+        Blackbox::requestClear();   // done by loop()
+        sendJsonOk(r);
+    });
+    // The page sends the viewer's clock (?ms=<Unix time in ms>) so this power-on
+    // gets a real date in the black box. No internet involved.
+    _server->on("/api/clock", HTTP_POST, [this](AsyncWebServerRequest* r) {
+        if (!checkAuth(r)) return;
+        if (r->hasParam("ms")) Blackbox::setClockFromBrowser(strtoull(r->getParam("ms")->value().c_str(), nullptr, 10));
+        sendJsonOk(r);
+    });
+
     _server->on("/updatefw", HTTP_POST,
         [this](AsyncWebServerRequest* request) {
             if (!checkAuth(request)) return;
@@ -698,6 +775,7 @@ void WebUIManager::begin(AsyncWebServer* server, AsyncWebSocket* ws) {
             serializeJson(resp, out);
             request->send(success ? 200 : 500, "application/json", out);
             if (success) {
+                Blackbox::noteRestart("firmware update from the web UI");
                 xTaskCreate([](void*) {
                     delay(800);
                     esp_restart();
@@ -830,6 +908,12 @@ nav button.tab.active{color:var(--accent);}
   white-space:pre-wrap;word-break:break-word;line-height:1.45;}
 #con_out .ln{color:#c9d1d9;}
 #con_out .cmd{color:var(--accent);}
+.bbrow{padding:6px 0;border-bottom:1px solid var(--border);font-size:13px;line-height:1.4;}
+.bbrow:last-child{border-bottom:none;}
+.bbrow .when{color:var(--muted);font-size:11px;}
+.pill.info{background:rgba(61,139,253,.15);color:var(--accent);}
+.pill.plain{background:var(--panel2);color:var(--muted);}
+#bb_list{max-height:60vh;overflow-y:auto;margin-top:6px;}
 </style>
 </head>
 <body>
@@ -942,6 +1026,18 @@ nav button.tab.active{color:var(--accent);}
     <div class="card">
       <h2>Last Cleared Fault</h2>
       <div id="f_history"><div class="row"><span class="k">No fault history yet this boot</span></div></div>
+    </div>
+    <div class="card">
+      <h2>Black Box</h2>
+      <div class="row"><span class="k">This power-on</span><span class="v" id="bb_session">--</span></div>
+      <div class="row"><span class="k">Started by</span><span class="v" id="bb_reason">--</span></div>
+      <div id="bb_list"><div class="row"><span class="k">Loading...</span></div></div>
+      <div class="actionsrow">
+        <button id="bb_refresh" class="secondary">Refresh</button>
+        <button id="bb_download" class="secondary">Download</button>
+        <button id="bb_clear" class="danger">Clear Black Box</button>
+      </div>
+      <div class="hint">Faults, charge sessions, restarts and settings changes, kept in flash across power-offs. Newest first; the last 150 are shown, Download has everything. Times are "power-on #, time since it started" unless a phone or computer had this page open during that power-on, which gives it a real date.</div>
     </div>
   </section>
 
@@ -1056,6 +1152,7 @@ document.querySelectorAll('nav .tab').forEach(btn=>{
     // less chance of tripping a known race-condition crash in the
     // underlying web server library -- see connectConsoleWs()).
     if (btn.dataset.tab === 'tab-console' && !conWs) connectConsoleWs();
+    if (btn.dataset.tab === 'tab-faults') bbLoad();
   });
 });
 
@@ -1177,6 +1274,8 @@ function applyState(d){
     ? '<div class="row"><span class="k">'+d.faults.history.reason+'</span><span class="v">'+fmtMs(d.faults.history.durationMs)+'</span></div>'+
       '<div class="row"><span class="k">Cleared</span><span class="v">'+d.faults.history.secondsAgo+'s ago</span></div>'
     : '<div class="row"><span class="k">No fault history yet this boot</span></div>';
+  document.getElementById('bb_session').textContent = '#' + d.sys.session;
+  document.getElementById('bb_reason').innerHTML = '<span class="pill '+(bbAbnormal(d.sys.resetReason)?'bad':'ok')+'">'+bbEsc(d.sys.resetReason)+'</span>';
   } catch (e) {
     console.error('applyState: failed partway through rendering telemetry', e, d);
   }
@@ -1338,6 +1437,71 @@ document.getElementById('c_autoTopUpBtn').addEventListener('click', ()=>{
 document.getElementById('f_clearBtn').addEventListener('click', ()=>{
   postJson('/api/faults/clear', {}).then(()=> toast('Fault clear sent to BMBs','ok')).catch(e=> toast(e.message,'err'));
 });
+
+// ── black box ─────────────────────────────────────────────────────────────
+// Lines are "<power-on #>,<seconds since power-on>,<TYPE>,<text>". A CLOCK line
+// carries that power-on's start as Unix time, which dates every line of it.
+let bbLines = [];
+function bbEsc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function bbAbnormal(text){ return /CRASH|HANG|BROWN-OUT/.test(text); }
+function bbParse(text){
+  return text.split('\n').map(l=>{
+    const a = l.indexOf(','), b = l.indexOf(',', a+1), c = l.indexOf(',', b+1);
+    if (a < 0 || b < 0 || c < 0) return null;
+    return {s: parseInt(l.slice(0,a)), up: parseInt(l.slice(a+1,b)), t: l.slice(b+1,c), x: l.slice(c+1)};
+  }).filter(e=> e);
+}
+function bbBootTimes(){
+  const boot = {};
+  bbLines.forEach(e=>{ if (e.t === 'CLOCK') boot[e.s] = parseInt(e.x); });
+  return boot;
+}
+function bbWhen(e, boot){
+  return boot[e.s] ? new Date((boot[e.s] + e.up) * 1000).toLocaleString() + ' (#'+e.s+')'
+                   : 'power-on #' + e.s + ', ' + fmtMs(e.up * 1000) + ' in';
+}
+function bbPill(e){
+  if (e.t === 'FAULT') return 'bad';
+  if (e.t === 'CLEAR') return 'ok';
+  if (e.t === 'CHG_ON' || e.t === 'CHG_OFF') return 'info';
+  if (e.t === 'BOOT') return bbAbnormal(e.x) ? 'bad' : 'plain';
+  if (e.t === 'SET' || e.t === 'CMD') return 'warn';
+  return 'plain';
+}
+function bbRender(){
+  const el = document.getElementById('bb_list');
+  if (!bbLines.length) { el.innerHTML = '<div class="row"><span class="k">Nothing recorded yet</span></div>'; return; }
+  const boot = bbBootTimes();
+  el.innerHTML = bbLines.slice(-150).reverse().map(e=>
+    '<div class="bbrow"><div class="when">'+bbEsc(bbWhen(e, boot))+'</div>'+
+    '<div><span class="pill '+bbPill(e)+'">'+bbEsc(e.t)+'</span> '+bbEsc(e.x)+'</div></div>'
+  ).join('');
+}
+function bbFetch(url){ return fetch(url, {cache:'no-store'}).then(r=> r.ok ? r.text() : ''); }
+function bbLoad(){
+  Promise.all([bbFetch('/api/blackbox?part=old'), bbFetch('/api/blackbox')])
+    .then(([older, current])=>{ bbLines = bbParse(older).concat(bbParse(current)); bbRender(); })
+    .catch(e=> toast('Could not load the black box: '+e.message, 'err'));
+}
+document.getElementById('bb_refresh').addEventListener('click', bbLoad);
+document.getElementById('bb_download').addEventListener('click', ()=>{
+  const boot = bbBootTimes();
+  const q = s=> '"' + String(s).replace(/"/g, '""') + '"';
+  const rows = ['power_on,seconds_since_power_on,date,type,text'].concat(bbLines.map(e=>
+    [e.s, e.up, boot[e.s] ? q(new Date((boot[e.s] + e.up) * 1000).toISOString()) : '', e.t, q(e.x)].join(',')));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([rows.join('\r\n')], {type:'text/csv'}));
+  a.download = 'blackbox.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+});
+document.getElementById('bb_clear').addEventListener('click', ()=>{
+  if (!confirm('Erase the whole black box? This cannot be undone.')) return;
+  postJson('/api/blackbox/clear', {}).then(()=>{ toast('Black box cleared', 'ok'); setTimeout(bbLoad, 1500); })
+    .catch(e=> toast(e.message, 'err'));
+});
+// Give this power-on a real date: the viewer's own clock, no internet needed.
+// The device keeps only the first one it gets per power-on.
+fetch('/api/clock?ms=' + Date.now(), {method:'POST'}).catch(()=>{});
 
 // ── firmware tab ──────────────────────────────────────────────────────────
 document.getElementById('fw_upload').addEventListener('click', ()=>{

@@ -12,6 +12,7 @@
 #include "Displaymanager.h"
 #include "Chargernpb.h"
 #include "Webui.h"
+#include "Blackbox.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
@@ -595,16 +596,14 @@ void setup()
     strip.show();
     setLED(255, 0, 0);  // Solid RED on boot
 
-    /*
-    if (!LittleFS.begin(true)) {
-        Serial.println("An error occurred while mounting LittleFS");
-        return;
-    }
-    */
-
     delay(2000);  //For easy debugging. It takes a few seconds for USB to come up properly
     SERIALCONSOLE.begin(115200);
     SERIALCONSOLE.println("Starting up!");
+
+    // Event log in flash (faults, charge sessions, restarts). First, so the
+    // boot line and the reason for this start are recorded even if something
+    // later in setup() hangs.
+    Blackbox::begin();
 
     // The AP is the primary interface -- this device spends nearly all its
     // life off any home network, controlled entirely over its own AP. It
@@ -917,6 +916,8 @@ void setup()
         })
         .onEnd([]() {
             Serial.println("End");
+            Blackbox::noteRestart("firmware update (ArduinoOTA)");
+            Blackbox::loop();   // ArduinoOTA restarts straight after this returns
         })
         .onProgress([](unsigned int progress, unsigned int total) {
             Serial.printf("Progress: %u%%\r", (progress * 100) / total);
@@ -1014,6 +1015,7 @@ void loop()
     console.loop(); // For interacting with the debug menu over serial
     webUI.processQueuedCommands(); // Console-tab / fault-clear commands from the web UI run HERE, not on the web server's task
     webUI.pumpLog(); // Mirror new SERIALCONSOLE output to the web Console tab -- cheap no-op if nothing new / nobody's watching
+    Blackbox::loop(); // write queued black-box events to flash -- the only place that writes them
 
     // 1-second tasks
     if (millis() - lastUpdate3 >= 1000) {
@@ -1246,6 +1248,21 @@ void loop()
                         Logger::error("Auto top-up: charger OFF command failed -- charger not responding, will retry");
                 }
             }
+        }
+
+        // Black box: one CHG_ON / CHG_OFF pair per charge session. The reason
+        // is worked out here because only loop() knows why the output went off.
+        {
+            const ChargerData& cd = charger.data();
+            bool on = chargerReady && cd.online && cd.outputOn;
+            // Live count, not dd.chargerBlocked: the backstop above can raise
+            // its fault and switch off within this same tick.
+            const char* why = bms.getBlockingFaultCount() > 0   ? "a fault"
+                            : !cd.online                        ? "charger stopped answering"
+                            : (cd.chgStatus & NPB_CHG_FULLM)    ? "charger reports full"
+                            : !desiredChargerOn                 ? "switched off"
+                            :                                     "charger stopped by itself";
+            Blackbox::chargerTick(on, on ? cd.iout : 0.0f, dd.packVoltage, why);
         }
 
         dd.hasFaultHistory          = hasFaultHistory;

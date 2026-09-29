@@ -28,6 +28,7 @@
 #include "Logger.h"
 #include "BMSModuleManager.h"
 #include "Chargernpb.h"
+#include "Blackbox.h"
 #include <Preferences.h>
 
 template<class T> inline Print &operator <<(Print &obj, T arg) { obj.print(arg); return obj; } //Lets us stream SerialUSB
@@ -675,6 +676,8 @@ void SerialConsole::handleShortCmd() {
         break;
     case 'z':
         Logger::console("Restart commanded");
+        Blackbox::noteRestart("console 'z' command");
+        Blackbox::loop();   // write it out now; this is loop(), and the restart is immediate
         esp_restart();
         break;
     case '1': case '2': case '3': case '4': case '5': case '6':
